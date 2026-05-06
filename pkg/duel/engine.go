@@ -1,0 +1,643 @@
+package duel
+
+import (
+	"errors"
+	"math"
+	"sync"
+	"time"
+
+	"geoduels/pkg/contracts"
+	"geoduels/pkg/gameplay"
+	"geoduels/pkg/rating"
+)
+
+const (
+	startingHP       = 6000
+	roundDuration    = 45 * time.Second
+	roundIdleCap     = 8 * time.Minute
+	roundIntro       = 3 * time.Second
+	pressureDuration = 15500 * time.Millisecond
+	resultDuration   = 6 * time.Second
+	disconnectGrace  = 30 * time.Second
+	staleGrace       = 3 * time.Minute
+	maxRounds        = 20
+	maxDistanceKm    = math.Pi * 6371.0
+	maxScore         = gameplay.MaxScore
+	perfectGuessKm   = 0.15
+)
+
+type Guess struct {
+	Lat       float64
+	Lng       float64
+	Finalized bool
+	Ts        time.Time
+}
+
+type Match struct {
+	ID                 string
+	State              contracts.MatchState
+	Unranked           bool
+	Players            map[string]*contracts.PlayerState
+	CurrentLocation    contracts.LocationPoint
+	CurrentIndex       int
+	RoundStartedAt     time.Time
+	RoundDeadline      time.Time
+	RoundID            string
+	Guesses            map[string]Guess
+	LastRoundResult    *contracts.RoundResult
+	RoundResults       []*contracts.RoundResult
+	RatingPreview      map[string]contracts.RatingDeltaPreview
+	IntermissionUntil  time.Time
+	PendingAdvance     bool
+	EventSeq           int64
+	RoundLiveAnnounced bool
+	CreatedAt          time.Time
+	LastActivity       time.Time
+}
+
+type RoundProvider func(matchID string, roundIndex int) (contracts.LocationPoint, error)
+
+type Engine struct {
+	mu            sync.RWMutex
+	matches       map[string]*Match
+	roundProvider RoundProvider
+}
+
+func New(roundProvider RoundProvider) *Engine {
+	return &Engine{matches: map[string]*Match{}, roundProvider: roundProvider}
+}
+
+func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile) (*Match, error) {
+	return e.CreateMatchWithOptions(matchID, playerIDs, profiles, MatchOptions{})
+}
+
+type MatchOptions struct {
+	Unranked bool
+}
+
+func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, opts MatchOptions) (*Match, error) {
+	if len(playerIDs) != 2 {
+		return nil, errors.New("duel requires exactly two players")
+	}
+	if e.roundProvider == nil {
+		return nil, errors.New("round provider required")
+	}
+	firstRound, err := e.roundProvider(matchID, 0)
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.matches[matchID]; ok {
+		return nil, errors.New("match already exists")
+	}
+	players := map[string]*contracts.PlayerState{}
+	for _, id := range playerIDs {
+		p := profiles[id]
+		name := p.DisplayName
+		if name == "" {
+			name = id
+		}
+		players[id] = &contracts.PlayerState{
+			UserID:            id,
+			DisplayName:       name,
+			MMR:               p.MMR,
+			RatingRD:          p.RatingRD,
+			RankedGamesPlayed: p.RankedGamesPlayed,
+			AvatarURL:         p.AvatarURL,
+			IsGuest:           p.IsGuest,
+			IsAdmin:           p.IsAdmin,
+			HP:                startingHP,
+		}
+	}
+	m := &Match{
+		ID:              matchID,
+		State:           contracts.MatchLive,
+		Unranked:        opts.Unranked,
+		Players:         players,
+		CurrentLocation: firstRound,
+		CurrentIndex:    0,
+		RoundStartedAt:  time.Now(),
+		RoundID:         roundID(matchID, 1),
+		Guesses:         map[string]Guess{},
+		EventSeq:        1,
+		CreatedAt:       time.Now(),
+		LastActivity:    time.Now(),
+	}
+	if !m.Unranked {
+		m.RatingPreview = ratingPreview(playerIDs, players)
+	}
+	e.matches[matchID] = m
+	return m, nil
+}
+
+func (e *Engine) GetSnapshot(matchID string) (*contracts.MatchSnapshot, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	m, ok := e.matches[matchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	return m.snapshot(), nil
+}
+
+func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.matches[g.MatchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	if m.State != contracts.MatchLive {
+		return nil, errors.New("match is not live")
+	}
+	if g.RoundID != m.RoundID {
+		return nil, errors.New("round mismatch")
+	}
+	if m.PendingAdvance && time.Now().Before(m.IntermissionUntil) {
+		return m.snapshot(), nil
+	}
+	p, exists := m.Players[g.UserID]
+	if !exists {
+		return nil, errors.New("player not in match")
+	}
+	now := time.Now()
+	if e.roundExpired(m, now) {
+		e.resolveRound(m)
+		return m.snapshot(), nil
+	}
+	if now.Before(m.RoundStartedAt.Add(roundIntro)) {
+		return m.snapshot(), nil
+	}
+	if existing, ok := m.Guesses[g.UserID]; ok && existing.Finalized {
+		return m.snapshot(), nil
+	}
+	guess := Guess{Lat: g.Lat, Lng: g.Lng, Finalized: g.Finalize, Ts: now}
+	m.Guesses[g.UserID] = guess
+	p.LastGuessLat = g.Lat
+	p.LastGuessLng = g.Lng
+	p.HasGuess = true
+	p.Finalized = g.Finalize
+	p.Disconnected = false
+	p.DisconnectDue = 0
+	m.LastActivity = now
+	m.EventSeq++
+	if g.Finalize {
+		pressureDeadline := now.Add(pressureDuration)
+		if m.RoundDeadline.IsZero() || pressureDeadline.Before(m.RoundDeadline) {
+			m.RoundDeadline = pressureDeadline
+		}
+	}
+	allFinal := true
+	for id := range m.Players {
+		gu, ok := m.Guesses[id]
+		if !ok || !gu.Finalized {
+			allFinal = false
+			break
+		}
+	}
+	if allFinal {
+		e.resolveRound(m)
+	}
+	return m.snapshot(), nil
+}
+
+func (e *Engine) Tick() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := time.Now()
+	changed := []string{}
+	for _, m := range e.matches {
+		if m.State != contracts.MatchLive {
+			continue
+		}
+		beforeSeq := m.EventSeq
+		if m.PendingAdvance {
+			if now.After(m.IntermissionUntil) {
+				e.advanceRound(m)
+			}
+			if m.EventSeq != beforeSeq {
+				changed = append(changed, m.ID)
+			}
+			continue
+		}
+		if !m.RoundLiveAnnounced && !now.Before(m.RoundStartedAt.Add(roundIntro)) {
+			m.RoundLiveAnnounced = true
+			m.EventSeq++
+		}
+		if e.roundExpired(m, now) {
+			e.resolveRound(m)
+		}
+		allDisconnected := true
+		maxDue := int64(0)
+		for _, p := range m.Players {
+			if !p.Disconnected {
+				allDisconnected = false
+			}
+			if p.DisconnectDue > maxDue {
+				maxDue = p.DisconnectDue
+			}
+			if p.Disconnected && p.DisconnectDue > 0 && now.UnixMilli() > p.DisconnectDue {
+				p.HP = 0
+				m.State = contracts.MatchEnded
+				m.LastActivity = now
+				m.EventSeq++
+			}
+		}
+		if m.State != contracts.MatchLive {
+			if m.EventSeq != beforeSeq {
+				changed = append(changed, m.ID)
+			}
+			continue
+		}
+		if allDisconnected && maxDue > 0 && now.UnixMilli() > maxDue {
+			for _, p := range m.Players {
+				p.HP = 0
+			}
+			m.State = contracts.MatchEnded
+			m.LastActivity = now
+			m.EventSeq++
+		} else if allDisconnected && !m.LastActivity.IsZero() && now.Sub(m.LastActivity) > staleGrace {
+			for _, p := range m.Players {
+				p.HP = 0
+			}
+			m.State = contracts.MatchEnded
+			m.EventSeq++
+		}
+		if m.EventSeq != beforeSeq {
+			changed = append(changed, m.ID)
+		}
+	}
+	return changed
+}
+
+func (e *Engine) MarkDisconnected(matchID, userID string) (*contracts.MatchSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.matches[matchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	p, ok := m.Players[userID]
+	if !ok {
+		return nil, errors.New("player not in match")
+	}
+	p.Disconnected = true
+	p.DisconnectDue = time.Now().Add(disconnectGrace).UnixMilli()
+	m.LastActivity = time.Now()
+	m.EventSeq++
+	return m.snapshot(), nil
+}
+
+func (e *Engine) MarkResumed(matchID, userID string) (*contracts.MatchSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.matches[matchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	p, ok := m.Players[userID]
+	if !ok {
+		return nil, errors.New("player not in match")
+	}
+	p.Disconnected = false
+	p.DisconnectDue = 0
+	m.LastActivity = time.Now()
+	m.EventSeq++
+	return m.snapshot(), nil
+}
+
+func (e *Engine) Forfeit(matchID, userID string) (*contracts.MatchSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m, ok := e.matches[matchID]
+	if !ok {
+		return nil, errors.New("match not found")
+	}
+	if m.State != contracts.MatchLive {
+		return m.snapshot(), nil
+	}
+	p, ok := m.Players[userID]
+	if !ok {
+		return nil, errors.New("player not in match")
+	}
+	p.HP = 0
+	p.Finalized = false
+	p.Disconnected = false
+	p.DisconnectDue = 0
+	m.PendingAdvance = false
+	m.IntermissionUntil = time.Time{}
+	m.State = contracts.MatchEnded
+	m.LastActivity = time.Now()
+	m.EventSeq++
+	return m.snapshot(), nil
+}
+
+func (e *Engine) resolveRound(m *Match) {
+	if m.State != contracts.MatchLive {
+		return
+	}
+	loc := m.CurrentLocation
+	result := &contracts.RoundResult{
+		RoundID:        m.RoundID,
+		RoundNumber:    m.CurrentIndex + 1,
+		ActualLocation: loc,
+		Players:        map[string]contracts.RoundPlayerResult{},
+	}
+	userIDs := make([]string, 0, len(m.Players))
+	for userID, p := range m.Players {
+		userIDs = append(userIDs, userID)
+		g, ok := m.Guesses[userID]
+		if !ok {
+			g = Guess{Lat: 0, Lng: 0}
+		}
+		dist := maxDistanceKm
+		if ok {
+			dist = gameplay.HaversineKm(loc.Lat, loc.Lng, g.Lat, g.Lng)
+		}
+		if dist > maxDistanceKm {
+			dist = maxDistanceKm
+		}
+		result.Players[userID] = contracts.RoundPlayerResult{
+			UserID:       userID,
+			Lat:          g.Lat,
+			Lng:          g.Lng,
+			DistanceKm:   dist,
+			Score:        gameplay.RoundScore(dist),
+			HPAfterRound: p.HP,
+			GuessUnixMS:  guessUnixMS(g),
+			GuessMS:      guessMS(g, m.RoundStartedAt.Add(roundIntro)),
+		}
+		p.Finalized = false
+	}
+	if len(userIDs) == 2 {
+		a := result.Players[userIDs[0]]
+		b := result.Players[userIDs[1]]
+		multiplier := roundDamageMultiplier(result.RoundNumber)
+		damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
+		switch {
+		case a.Score > b.Score:
+			a.DamageDealt = damage
+			b.DamageTaken = damage
+			p := m.Players[userIDs[1]]
+			p.HP -= damage
+			if p.HP < 0 {
+				p.HP = 0
+			}
+		case b.Score > a.Score:
+			b.DamageDealt = damage
+			a.DamageTaken = damage
+			p := m.Players[userIDs[0]]
+			p.HP -= damage
+			if p.HP < 0 {
+				p.HP = 0
+			}
+		}
+		a.HPAfterRound = m.Players[userIDs[0]].HP
+		b.HPAfterRound = m.Players[userIDs[1]].HP
+		result.Players[userIDs[0]] = a
+		result.Players[userIDs[1]] = b
+	}
+	for _, p := range m.Players {
+		if p.HP <= 0 {
+			p.HP = 0
+			m.State = contracts.MatchEnded
+		}
+	}
+	if result.RoundNumber >= maxRounds {
+		m.State = contracts.MatchEnded
+	}
+	m.LastRoundResult = result
+	m.RoundResults = append(m.RoundResults, result)
+	m.Guesses = map[string]Guess{}
+	m.LastActivity = time.Now()
+	m.EventSeq++
+	if m.State == contracts.MatchEnded {
+		return
+	}
+	m.PendingAdvance = true
+	m.IntermissionUntil = time.Now().Add(resultDuration)
+	m.LastActivity = time.Now()
+	m.EventSeq++
+}
+
+func guessUnixMS(g Guess) int64 {
+	if g.Ts.IsZero() {
+		return 0
+	}
+	return g.Ts.UnixMilli()
+}
+
+func guessMS(g Guess, roundLiveAt time.Time) int64 {
+	if g.Ts.IsZero() || roundLiveAt.IsZero() {
+		return 0
+	}
+	ms := g.Ts.Sub(roundLiveAt).Milliseconds()
+	if ms < 0 {
+		return 0
+	}
+	return ms
+}
+
+func (e *Engine) advanceRound(m *Match) {
+	if !m.PendingAdvance {
+		return
+	}
+	nextIndex := m.CurrentIndex + 1
+	nextLoc, err := e.roundProvider(m.ID, nextIndex)
+	if err != nil {
+		m.State = contracts.MatchEnded
+		m.PendingAdvance = false
+		m.IntermissionUntil = time.Time{}
+		m.LastActivity = time.Now()
+		m.EventSeq++
+		return
+	}
+	m.CurrentIndex = nextIndex
+	m.CurrentLocation = nextLoc
+	nextRound := m.CurrentIndex + 1
+	m.RoundID = roundID(m.ID, nextRound)
+	m.RoundStartedAt = time.Now()
+	m.RoundDeadline = time.Time{}
+	m.RoundLiveAnnounced = false
+	for _, p := range m.Players {
+		p.Finalized = false
+		p.LastGuessLat = 0
+		p.LastGuessLng = 0
+		p.HasGuess = false
+	}
+	m.PendingAdvance = false
+	m.IntermissionUntil = time.Time{}
+	m.LastActivity = time.Now()
+	m.EventSeq++
+}
+
+func (m *Match) snapshot() *contracts.MatchSnapshot {
+	now := time.Now()
+	phase := contracts.PhaseLive
+	roundPhase := contracts.RoundPhaseLive
+	phaseStartedAt := m.RoundStartedAt
+	phaseEndsAt := m.RoundDeadline
+	if m.State == contracts.MatchEnded {
+		phase = contracts.PhaseEnded
+		roundPhase = contracts.RoundPhaseEnded
+		phaseStartedAt = now
+		phaseEndsAt = now
+	} else if m.PendingAdvance && now.Before(m.IntermissionUntil) {
+		phase = contracts.PhaseRoundResult
+		roundPhase = contracts.RoundPhaseResult
+		phaseStartedAt = m.IntermissionUntil.Add(-resultDuration)
+		phaseEndsAt = m.IntermissionUntil
+	} else if m.PendingAdvance {
+		roundPhase = contracts.RoundPhaseTransition
+		phaseStartedAt = m.IntermissionUntil
+		phaseEndsAt = now
+	} else if now.Before(m.RoundStartedAt.Add(roundIntro)) {
+		roundPhase = contracts.RoundPhaseIntro
+		phaseStartedAt = m.RoundStartedAt
+		phaseEndsAt = m.RoundStartedAt.Add(roundIntro)
+	} else if m.RoundDeadline.IsZero() {
+		roundPhase = contracts.RoundPhaseLive
+		phaseStartedAt = m.RoundStartedAt.Add(roundIntro)
+		phaseEndsAt = time.Time{}
+	} else {
+		roundPhase = contracts.RoundPhaseLive
+		phaseStartedAt = m.RoundStartedAt.Add(roundIntro)
+		phaseEndsAt = m.RoundDeadline
+	}
+	var current *contracts.RoundState
+	if phase == contracts.PhaseLive && m.State == contracts.MatchLive {
+		current = &contracts.RoundState{
+			RoundID:       m.RoundID,
+			RoundNumber:   m.CurrentIndex + 1,
+			RoundDeadline: m.RoundDeadline,
+			TimerStarted:  !m.RoundDeadline.IsZero(),
+			Location:      m.CurrentLocation,
+		}
+	}
+	players := map[string]contracts.PlayerState{}
+	for id, p := range m.Players {
+		players[id] = *p
+	}
+	msLeft := int64(0)
+	if phase == contracts.PhaseRoundResult {
+		msLeft = maxInt64(0, time.Until(m.IntermissionUntil).Milliseconds())
+	} else if phase == contracts.PhaseLive && roundPhase == contracts.RoundPhaseIntro {
+		msLeft = maxInt64(0, time.Until(m.RoundStartedAt.Add(roundIntro)).Milliseconds())
+	} else if phase == contracts.PhaseLive && !m.RoundDeadline.IsZero() {
+		msLeft = maxInt64(0, time.Until(m.RoundDeadline).Milliseconds())
+	}
+	return &contracts.MatchSnapshot{
+		MatchID:         m.ID,
+		Mode:            contracts.ModeDuel,
+		Unranked:        m.Unranked,
+		State:           m.State,
+		Phase:           phase,
+		RoundPhase:      roundPhase,
+		PhaseStartedAt:  phaseStartedAt.UnixMilli(),
+		PhaseEndsAt:     unixMilliOrZero(phaseEndsAt),
+		CurrentRound:    current,
+		LastRoundResult: m.LastRoundResult,
+		RoundResults:    append([]*contracts.RoundResult(nil), m.RoundResults...),
+		RoundMSLeft:     msLeft,
+		Players:         players,
+		RatingPreview:   copyRatingPreview(m.RatingPreview),
+		EventSequence:   m.EventSeq,
+		ServerUnixMS:    time.Now().UnixMilli(),
+		GraceWindowSec:  int(disconnectGrace.Seconds()),
+	}
+}
+
+func ratingPreview(playerIDs []string, players map[string]*contracts.PlayerState) map[string]contracts.RatingDeltaPreview {
+	if len(playerIDs) != 2 {
+		return nil
+	}
+	p1 := players[playerIDs[0]]
+	p2 := players[playerIDs[1]]
+	if p1 == nil || p2 == nil || (p1.IsGuest && p2.IsGuest) {
+		return nil
+	}
+	now := time.Now()
+	p1State := rating.State{MMR: p1.MMR, RD: p1.RatingRD, UpdatedAt: now}
+	p2State := rating.State{MMR: p2.MMR, RD: p2.RatingRD, UpdatedAt: now}
+	p1Win, p2Lose := rating.CalculateDuelUpdates(p1State, p2State, "p1", now)
+	p1Lose, p2Win := rating.CalculateDuelUpdates(p1State, p2State, "p2", now)
+	p1Draw, p2Draw := rating.CalculateDuelUpdates(p1State, p2State, "", now)
+
+	preview := map[string]contracts.RatingDeltaPreview{}
+	if !p1.IsGuest {
+		preview[p1.UserID] = contracts.RatingDeltaPreview{Win: p1Win.Delta, Lose: p1Lose.Delta, Draw: p1Draw.Delta}
+	}
+	if !p2.IsGuest {
+		preview[p2.UserID] = contracts.RatingDeltaPreview{Win: p2Win.Delta, Lose: p2Lose.Delta, Draw: p2Draw.Delta}
+	}
+	return preview
+}
+
+func copyRatingPreview(in map[string]contracts.RatingDeltaPreview) map[string]contracts.RatingDeltaPreview {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]contracts.RatingDeltaPreview, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func (e *Engine) roundExpired(m *Match, now time.Time) bool {
+	if !m.RoundDeadline.IsZero() {
+		return now.After(m.RoundDeadline)
+	}
+	liveAt := m.RoundStartedAt.Add(roundIntro)
+	return now.After(liveAt.Add(roundIdleCap))
+}
+
+func roundID(matchID string, round int) string {
+	return matchID + ":r" + strconv(round)
+}
+
+func strconv(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	out := ""
+	for n > 0 {
+		d := n % 10
+		out = string(rune('0'+d)) + out
+		n = n / 10
+	}
+	return out
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func roundScore(distanceKm float64) int {
+	return gameplay.RoundScore(distanceKm)
+}
+
+func roundDamageMultiplier(roundNumber int) float64 {
+	if roundNumber <= 2 {
+		return 1.0
+	}
+	return 1.0 + (0.5 * float64(roundNumber-2))
+}

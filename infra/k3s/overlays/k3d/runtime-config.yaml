@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geoduels-runtime-config
+data:
+  APP_ACCESS_TOKEN_TTL: 15m
+  APP_REFRESH_TOKEN_TTL: 720h
+  CORS_ALLOWED_ORIGINS: http://localhost
+  GAMEPLAY_NODE_TTL: 10s
+  GUEST_SIGNUP_IP_LIMIT: "5"
+  GUEST_SIGNUP_IP_WINDOW: 10m
+  LOCATION_MAP_KEY: a-source-world
+  TRUSTED_PROXY_CIDRS: 10.42.0.0/16
+  NEXT_PUBLIC_API_URL: http://localhost
+  NEXT_PUBLIC_ADSENSE_CLIENT_ID: "ca-pub-5605821452779265"
+  NEXT_PUBLIC_ADSENSE_PLAY_SLOT: "4817973759"
+  NEXT_PUBLIC_APP_VERSION: k3d
+  NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: http://localhost
+  NEXT_PUBLIC_QUEUE_URL: http://localhost
+  NEXT_PUBLIC_REALTIME_URL: ws://localhost
+  GOOGLE_ISSUER: https://accounts.google.com
+  MATCH_COORDINATOR_URL: http://match-coordinator:8090

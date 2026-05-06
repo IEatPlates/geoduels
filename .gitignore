@@ -1,0 +1,52 @@
+# Environment files
+.env
+.env.*
+!.env.example
+!apps/web/.env.local.example
+infra/k3s/overlays/k3d/secrets.env
+infra/k3s/overlays/prod/secrets.prod.env
+
+# Node / Next.js
+node_modules/
+**/node_modules/
+.next/
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Go build artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Runtime and logs
+runtime/*.json
+*.log
+
+# Ansible local/vendor files
+infra/ansible/**/.roles/
+infra/ansible/**/inventory/hosts.ini
+infra/ansible/**/group_vars/all.yml
+
+# IDE / OS files
+.idea/
+.vscode/
+.DS_Store
+.codex
+tmp/
+
+# data
+datasets/*.json
+datasets/vali
+vali-fun-balanced-world-1k.json

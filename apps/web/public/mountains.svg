@@ -1,0 +1,26 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Green mountain background">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2f6e57"/>
+      <stop offset="100%" stop-color="#163b33"/>
+    </linearGradient>
+    <linearGradient id="ridgeBack" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2c7a52"/>
+      <stop offset="100%" stop-color="#174534"/>
+    </linearGradient>
+    <linearGradient id="ridgeMid" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#37905f"/>
+      <stop offset="100%" stop-color="#1f5a42"/>
+    </linearGradient>
+    <linearGradient id="ridgeFront" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#41a06f"/>
+      <stop offset="100%" stop-color="#2b6b4e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="700" fill="url(#sky)"/>
+
+  <path d="M0 430 L140 290 L260 430 L390 250 L530 430 L690 260 L850 430 L1000 300 L1200 430 L1200 700 L0 700 Z" fill="url(#ridgeBack)" opacity="0.85"/>
+  <path d="M0 500 L170 360 L320 500 L500 320 L680 500 L860 330 L1040 500 L1200 390 L1200 700 L0 700 Z" fill="url(#ridgeMid)" opacity="0.92"/>
+  <path d="M0 590 L210 460 L390 590 L620 420 L840 590 L1020 470 L1200 590 L1200 700 L0 700 Z" fill="url(#ridgeFront)"/>
+</svg>

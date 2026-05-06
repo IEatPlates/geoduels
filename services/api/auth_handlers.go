@@ -1,0 +1,390 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"geoduels/pkg/auth"
+	"geoduels/pkg/contracts"
+	"geoduels/pkg/persistence"
+)
+
+func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Nickname string `json:"nickname"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if payload, nextRefreshToken, err := a.rotateSessionFromCookie(r); err == nil {
+		a.setRefreshCookie(w, r, nextRefreshToken)
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	displayName, err := guestDisplayName(req.Nickname)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
+		http.Error(w, "signup unavailable (101)", http.StatusInternalServerError)
+		return
+	} else if banned {
+		http.Error(w, "signup unavailable (102)", http.StatusForbidden)
+		return
+	}
+	if ok, retryAfter, err := a.checkGuestSignupRateLimit(r); err != nil {
+		http.Error(w, "signup unavailable (103)", http.StatusInternalServerError)
+		return
+	} else if !ok {
+		writeRateLimited(w, retryAfter)
+		return
+	}
+	identity, err := a.store.CreateGuestIdentity(displayName)
+	if err != nil {
+		http.Error(w, "persist guest failed", http.StatusInternalServerError)
+		return
+	}
+	if err := a.writeSessionResponse(w, r, identity); err != nil {
+		http.Error(w, "issue session failed", http.StatusInternalServerError)
+	}
+}
+
+func (a *api) session(w http.ResponseWriter, r *http.Request) {
+	if err := a.writeRotatedSessionResponse(w, r); err != nil {
+		a.clearRefreshCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (a *api) refresh(w http.ResponseWriter, r *http.Request) {
+	if err := a.writeRotatedSessionResponse(w, r); err != nil {
+		a.clearRefreshCookie(w, r)
+		http.Error(w, "invalid session", http.StatusUnauthorized)
+	}
+}
+
+func (a *api) completeOnboarding(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	identity, err := a.store.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	if identity.Onboarded {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"alreadyOnboarded": true,
+			"user":             sessionUser(identity),
+		})
+		return
+	}
+	var req struct {
+		Nickname string `json:"nickname"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	nick, err := validatedNickname(req.Nickname)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.store.CompleteOnboarding(identity.Sub, identity.Email, nick); err != nil {
+		http.Error(w, "failed to create profile", http.StatusInternalServerError)
+		return
+	}
+	updated, err := a.store.GetIdentity(identity.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	payload, err := a.issueAuthSessionPayload(updated, claims.SessionID)
+	if err != nil {
+		http.Error(w, "issue session failed", http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (a *api) updateNickname(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	identity, err := a.store.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	if !identity.Onboarded {
+		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Nickname string `json:"nickname"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	nick, err := validatedNickname(req.Nickname)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.store.UpdateDisplayName(claims.Sub, nick); err != nil {
+		http.Error(w, "failed to update nickname", http.StatusInternalServerError)
+		return
+	}
+	updated, err := a.store.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"user": map[string]any{
+			"id":           updated.Sub,
+			"display_name": defaultStr(updated.DisplayName, updated.GoogleName),
+			"avatar_url":   updated.AvatarURL,
+			"email":        updated.Email,
+			"isGuest":      updated.AccountType == "guest",
+		},
+	})
+}
+
+func (a *api) logout(w http.ResponseWriter, r *http.Request) {
+	sessionID, userID := a.sessionIdentity(r)
+	if sessionID != "" {
+		_ = a.store.RevokeAuthSession(sessionID)
+	} else if userID != "" {
+		_ = a.store.RevokeAuthSessionsForUser(userID)
+	}
+	a.clearRefreshCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) logoutAll(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := a.store.RevokeAuthSessionsForUser(claims.Sub); err != nil {
+		http.Error(w, "logout failed", http.StatusInternalServerError)
+		return
+	}
+	a.clearRefreshCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func validatedNickname(raw string) (string, error) {
+	nick, err := sanitizeNickname(raw)
+	if err != nil {
+		return "", err
+	}
+	if err := nicknameAbusive(nick); err != nil {
+		return "", err
+	}
+	return nick, nil
+}
+
+func guestDisplayName(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "Guest", nil
+	}
+	return validatedNickname(raw)
+}
+
+func (a *api) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {
+	authz := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authz, "Bearer ") {
+		return auth.AppClaims{}, errors.New("missing bearer token")
+	}
+	tok := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
+	return auth.ValidateAppAccessToken(a.appAuthSecret, tok)
+}
+
+func (a *api) sessionIdentity(r *http.Request) (string, string) {
+	if claims, err := a.authenticatedClaims(r); err == nil {
+		return claims.SessionID, claims.Sub
+	}
+	refreshToken := a.readRefreshCookie(r)
+	if refreshToken == "" {
+		return "", ""
+	}
+	rec, ok, err := a.store.GetAuthSessionByRefreshToken(auth.RefreshTokenHash(refreshToken))
+	if err != nil || !ok {
+		return "", ""
+	}
+	return rec.ID, rec.UserID
+}
+
+func (a *api) writeSessionResponse(w http.ResponseWriter, r *http.Request, identity persistence.Identity) error {
+	refreshToken, sessionRecord, err := a.createSession(identity.Sub, r)
+	if err != nil {
+		return err
+	}
+	payload, err := a.issueAuthSessionPayload(identity, sessionRecord.ID)
+	if err != nil {
+		return err
+	}
+	a.setRefreshCookie(w, r, refreshToken)
+	return json.NewEncoder(w).Encode(payload)
+}
+
+func (a *api) writeRotatedSessionResponse(w http.ResponseWriter, r *http.Request) error {
+	payload, nextRefreshToken, err := a.rotateSessionFromCookie(r)
+	if err != nil {
+		return err
+	}
+	a.setRefreshCookie(w, r, nextRefreshToken)
+	return json.NewEncoder(w).Encode(payload)
+}
+
+func (a *api) rotateSessionFromCookie(r *http.Request) (contracts.AuthSessionPayload, string, error) {
+	refreshToken := a.readRefreshCookie(r)
+	if refreshToken == "" {
+		return contracts.AuthSessionPayload{}, "", errors.New("missing refresh token")
+	}
+	currentHash := auth.RefreshTokenHash(refreshToken)
+	rec, ok, err := a.store.GetAuthSessionByRefreshToken(currentHash)
+	if err != nil {
+		return contracts.AuthSessionPayload{}, "", err
+	}
+	if !ok || rec.RevokedAt != nil || time.Now().After(rec.ExpiresAt) {
+		return contracts.AuthSessionPayload{}, "", errors.New("session unavailable")
+	}
+	nextRefreshToken, nextHash, err := auth.NewRefreshToken()
+	if err != nil {
+		return contracts.AuthSessionPayload{}, "", err
+	}
+	rotated, ok, err := a.store.RotateAuthSession(rec.ID, currentHash, nextHash, time.Now().Add(a.refreshTokenTTL), time.Now())
+	if err != nil {
+		return contracts.AuthSessionPayload{}, "", err
+	}
+	if !ok {
+		return contracts.AuthSessionPayload{}, "", errors.New("session rotation failed")
+	}
+	identity, err := a.store.GetIdentity(rotated.UserID)
+	if err != nil {
+		return contracts.AuthSessionPayload{}, "", err
+	}
+	payload, err := a.issueAuthSessionPayload(identity, rotated.ID)
+	if err != nil {
+		return contracts.AuthSessionPayload{}, "", err
+	}
+	return payload, nextRefreshToken, nil
+}
+
+func (a *api) createSession(userID string, r *http.Request) (string, persistence.RefreshTokenRecord, error) {
+	refreshToken, hash, err := auth.NewRefreshToken()
+	if err != nil {
+		return "", persistence.RefreshTokenRecord{}, err
+	}
+	record, err := a.store.CreateAuthSession(userID, hash, time.Now().Add(a.refreshTokenTTL), persistence.AuthSessionParams{
+		UserAgent: strings.TrimSpace(r.UserAgent()),
+		IPAddress: a.clientIP(r),
+	})
+	if err != nil {
+		return "", persistence.RefreshTokenRecord{}, err
+	}
+	return refreshToken, record, nil
+}
+
+func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID string) (contracts.AuthSessionPayload, error) {
+	bootstrapped, err := a.autoBootstrapAdmin(identity)
+	if err != nil {
+		return contracts.AuthSessionPayload{}, err
+	}
+	identity = bootstrapped
+	accessToken, err := auth.IssueAppAccessToken(a.appAuthSecret, identity.Sub, sessionID, a.accessTokenTTL)
+	if err != nil {
+		return contracts.AuthSessionPayload{}, err
+	}
+	payload := contracts.AuthSessionPayload{
+		AccessToken:        accessToken,
+		OnboardingRequired: !identity.Onboarded,
+		SuggestedNickname:  defaultStr(identity.GoogleName, identity.DisplayName),
+		User:               sessionUser(identity),
+	}
+	return payload, nil
+}
+
+func (a *api) autoBootstrapAdmin(identity persistence.Identity) (persistence.Identity, error) {
+	if identity.IsAdmin {
+		return identity, nil
+	}
+	email := strings.ToLower(strings.TrimSpace(identity.Email))
+	if email == "" {
+		return identity, nil
+	}
+	if _, ok := a.adminBootstrapEmails[email]; !ok {
+		return identity, nil
+	}
+	if err := a.store.SetUserAdmin(identity.Sub, true); err != nil {
+		return persistence.Identity{}, err
+	}
+	return a.store.GetIdentity(identity.Sub)
+}
+
+func sessionUser(identity persistence.Identity) contracts.AuthUser {
+	return contracts.AuthUser{
+		ID:          identity.Sub,
+		IsGuest:     identity.AccountType == "guest",
+		IsAdmin:     identity.IsAdmin,
+		IsModerator: identity.IsModerator,
+	}
+}
+
+func (a *api) setRefreshCookie(w http.ResponseWriter, r *http.Request, refreshToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     a.refreshCookieName,
+		Value:    refreshToken,
+		Path:     "/",
+		Domain:   a.refreshCookieDomain,
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
+		SameSite: a.refreshCookieSameSite,
+		Expires:  time.Now().Add(a.refreshTokenTTL),
+		MaxAge:   int(a.refreshTokenTTL.Seconds()),
+	})
+}
+
+func (a *api) clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     a.refreshCookieName,
+		Value:    "",
+		Path:     "/",
+		Domain:   a.refreshCookieDomain,
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
+		SameSite: a.refreshCookieSameSite,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+}
+
+func (a *api) readRefreshCookie(r *http.Request) string {
+	cookie, err := r.Cookie(a.refreshCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return true
+	}
+	return r.TLS != nil
+}

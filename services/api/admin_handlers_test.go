@@ -1,0 +1,138 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
+
+	"geoduels/pkg/auth"
+	"geoduels/pkg/persistence"
+)
+
+type adminModerationTestStore struct {
+	persistence.Store
+	identity         persistence.Identity
+	bannedUserID     string
+	bannedReason     string
+	banned           bool
+	refundUserID     string
+	refundLookback   time.Duration
+	refundsRequested bool
+}
+
+func (s *adminModerationTestStore) GetIdentity(sub string) (persistence.Identity, error) {
+	return s.identity, nil
+}
+
+func (s *adminModerationTestStore) SetPlayerBan(userID, reason string, banned bool) error {
+	s.bannedUserID = userID
+	s.bannedReason = reason
+	s.banned = banned
+	return nil
+}
+
+func (s *adminModerationTestStore) IssueEloRefundsForCheater(userID string, lookback time.Duration) (persistence.EloRefundSummary, error) {
+	s.refundsRequested = true
+	s.refundUserID = userID
+	s.refundLookback = lookback
+	return persistence.EloRefundSummary{RefundsIssued: 2, TotalRefunded: 30}, nil
+}
+
+func TestModeratorCanBanPlayer(t *testing.T) {
+	secret := []byte("01234567890123456789012345678901")
+	token, err := auth.IssueAppAccessToken(secret, "moderator-1", "session-1", time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	store := &adminModerationTestStore{
+		identity: persistence.Identity{
+			Sub:         "moderator-1",
+			IsModerator: true,
+		},
+	}
+	a := &api{
+		store:                store,
+		appAuthSecret:        secret,
+		adminBootstrapEmails: map[string]struct{}{},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/players/user-2/ban", strings.NewReader(`{"reason":"reported cheating"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req = mux.SetURLVars(req, map[string]string{"id": "user-2"})
+	rec := httptest.NewRecorder()
+
+	a.adminBanPlayer(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	if store.bannedUserID != "user-2" || !store.banned {
+		t.Fatalf("expected user-2 to be banned, got userID=%q banned=%v", store.bannedUserID, store.banned)
+	}
+	if store.bannedReason != "reported cheating" {
+		t.Fatalf("ban reason = %q", store.bannedReason)
+	}
+	if !store.refundsRequested || store.refundUserID != "user-2" || store.refundLookback != 24*time.Hour {
+		t.Fatalf("expected refunds for user-2 within 24h, got requested=%v userID=%q lookback=%s", store.refundsRequested, store.refundUserID, store.refundLookback)
+	}
+}
+
+func TestNonModeratorCannotBanPlayer(t *testing.T) {
+	secret := []byte("01234567890123456789012345678901")
+	token, err := auth.IssueAppAccessToken(secret, "player-1", "session-1", time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	store := &adminModerationTestStore{
+		identity: persistence.Identity{Sub: "player-1"},
+	}
+	a := &api{
+		store:                store,
+		appAuthSecret:        secret,
+		adminBootstrapEmails: map[string]struct{}{},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/players/user-2/ban", strings.NewReader(`{"reason":"reported cheating"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req = mux.SetURLVars(req, map[string]string{"id": "user-2"})
+	rec := httptest.NewRecorder()
+
+	a.adminBanPlayer(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	if store.bannedUserID != "" || store.refundsRequested {
+		t.Fatalf("plain player should not ban or issue refunds, bannedUserID=%q refunds=%v", store.bannedUserID, store.refundsRequested)
+	}
+}
+
+func TestNormalizeDiscordWebhookURL(t *testing.T) {
+	valid := "https://discord.com/api/webhooks/123/token"
+	got, err := normalizeDiscordWebhookURL("  " + valid + "  ")
+	if err != nil {
+		t.Fatalf("valid webhook rejected: %v", err)
+	}
+	if got != valid {
+		t.Fatalf("normalized url = %q, want %q", got, valid)
+	}
+
+	if got, err := normalizeDiscordWebhookURL(" "); err != nil || got != "" {
+		t.Fatalf("blank webhook = %q, %v; want empty nil", got, err)
+	}
+
+	invalid := []string{
+		"http://discord.com/api/webhooks/123/token",
+		"https://example.com/api/webhooks/123/token",
+		"https://discord.com/channels/123",
+	}
+	for _, raw := range invalid {
+		if _, err := normalizeDiscordWebhookURL(raw); err == nil {
+			t.Fatalf("expected %q to be rejected", raw)
+		}
+	}
+}

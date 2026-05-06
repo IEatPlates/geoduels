@@ -1,0 +1,630 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
+
+	"geoduels/pkg/auth"
+	"geoduels/pkg/contracts"
+	"geoduels/pkg/coordinator"
+	"geoduels/pkg/maintenance"
+	"geoduels/pkg/matchlaunch"
+	"geoduels/pkg/matchstore"
+	"geoduels/pkg/observability"
+	"geoduels/pkg/persistence"
+	"geoduels/pkg/sessionpolicy"
+)
+
+type matchCoordinator struct {
+	store      matchstore.Store
+	state      *coordinator.Store
+	persist    persistence.Store
+	redis      *redis.Client
+	httpClient *http.Client
+	appSecret  []byte
+	ticketAuth []byte
+	internal   string
+	metrics    *observability.APIMetrics
+	draining   atomic.Bool
+}
+
+var queueUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
+
+func main() {
+	rdb, redisCleanup, err := redisFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	store, err := matchstore.NewFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	persist, err := persistence.NewFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	singleplayerTTL := getenvDuration("SINGLEPLAYER_SESSION_TTL", 24*time.Hour)
+	if err := persist.ExpireStaleRuntimeMatches("solo-", singleplayerTTL); err != nil {
+		log.Fatal(err)
+	}
+	if err := persist.ExpireOpenLobbies(); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := persist.ReopenEndedLobbies(); err != nil {
+		log.Fatal(err)
+	}
+	appSecret, err := requiredSecret("APP_AUTH_SECRET", 32)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ticketSecret, err := requiredSecret("GAMEPLAY_TICKET_SECRET", 32)
+	if err != nil {
+		log.Fatal(err)
+	}
+	internalSecret := strings.TrimSpace(os.Getenv("COORDINATOR_INTERNAL_SECRET"))
+	if internalSecret == "" {
+		log.Fatal("COORDINATOR_INTERNAL_SECRET is required")
+	}
+
+	q := &matchCoordinator{
+		store:      store,
+		state:      coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
+		persist:    persist,
+		redis:      rdb,
+		httpClient: &http.Client{Timeout: 3 * time.Second},
+		appSecret:  appSecret,
+		ticketAuth: ticketSecret,
+		internal:   internalSecret,
+		metrics:    observability.NewAPIMetrics(),
+	}
+	defer q.persist.Close()
+	defer redisCleanup()
+
+	r := mux.NewRouter()
+	r.HandleFunc("/health", q.healthLive).Methods(http.MethodGet)
+	r.HandleFunc("/health/live", q.healthLive).Methods(http.MethodGet)
+	r.HandleFunc("/health/ready", q.healthReady).Methods(http.MethodGet)
+	r.HandleFunc("/queue", q.queue).Methods(http.MethodGet)
+	r.HandleFunc("/queue/heartbeat", q.heartbeat).Methods(http.MethodPost)
+	r.HandleFunc("/queue/online", q.online).Methods(http.MethodGet)
+	r.HandleFunc("/lobbies/{id}/ws", q.lobbyWS).Methods(http.MethodGet)
+	r.HandleFunc("/lobbies/{id}/start", q.startLobby).Methods(http.MethodPost)
+	r.Handle("/metrics", observability.Handler(q.metrics.Registry)).Methods(http.MethodGet)
+
+	addr := getenv("MATCH_COORDINATOR_ADDR", getenv("QUEUE_COORDINATOR_ADDR", ":8090"))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           cors(q.metrics.Middleware(r)),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	observability.Log("info", "match-coordinator startup", map[string]any{"addr": addr})
+	go q.runLobbyCleanupLoop(
+		getenvDuration("LOBBY_CLEANUP_INTERVAL", 30*time.Second),
+		getenvDuration("LOBBY_INACTIVITY_TTL", 5*time.Minute),
+	)
+	go q.runMatchmakingLoop(
+		getenvDuration("MATCHMAKING_INTERVAL", 500*time.Millisecond),
+		getenvInt("MATCHMAKING_BATCH_SIZE", 50),
+	)
+	go q.handleShutdown(srv)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}
+
+func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize int) {
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if q.draining.Load() {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), interval)
+		status, err := q.maintenanceStatus(ctx)
+		cancel()
+		if err == nil && status.QueueBlocked() {
+			continue
+		}
+		for _, pool := range matchstore.AllQueuePools() {
+			if _, err := q.store.RunMatchmaking(pool, batchSize); err != nil {
+				observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(pool), "error": err.Error()})
+			}
+		}
+	}
+}
+
+func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
+	if q.draining.Load() {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
+	status, err := q.maintenanceStatus(r.Context())
+	if err != nil {
+		http.Error(w, "queue unavailable", http.StatusBadGateway)
+		return
+	}
+	if status.QueueBlocked() {
+		http.Error(w, maintenanceQueueMessage(status), http.StatusServiceUnavailable)
+		return
+	}
+	claims, err := q.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	identity, err := q.persist.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	if identity.IsBanned {
+		http.Error(w, "account is banned", http.StatusForbidden)
+		return
+	}
+	if !identity.Onboarded {
+		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+		return
+	}
+	userID := claims.Sub
+
+	conn, err := queueUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	q.touchPresence(userID)
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	conn.SetReadLimit(1024)
+	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		q.touchPresence(userID)
+		return conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	})
+
+	go func() {
+		defer cancel()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	var writeMu sync.Mutex
+
+	if assigned, ok, err := q.state.GetAssignmentByUser(r.Context(), userID); err == nil && ok {
+		mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)
+		switch q.launcher().ValidateAssignment(r.Context(), assigned) {
+		case matchlaunch.AssignmentValid:
+			if mode == contracts.ModeDuel {
+				payload, ok, err := q.launcher().AssignedPayload(userID, assigned)
+				if err == nil && ok {
+					q.writeQueueMessage(conn, &writeMu, "match_assigned", payload)
+					return
+				}
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "ACTIVE_MATCH_CONFLICT", "message": "Finish or resume your current duel before queueing again."})
+				return
+			}
+			q.clearSupersededAssignment(context.Background(), assigned)
+		case matchlaunch.AssignmentPending:
+			if mode == contracts.ModeDuel {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "ACTIVE_MATCH_CONFLICT", "message": "Finish or resume your current duel before queueing again."})
+				return
+			}
+			q.clearSupersededAssignment(context.Background(), assigned)
+		case matchlaunch.AssignmentAbandoned, matchlaunch.AssignmentInvalid:
+			_ = q.state.ClearAssignment(context.Background(), assigned)
+		}
+	}
+
+	profile, err := q.persist.GetProfile(userID)
+	if err != nil {
+		http.Error(w, "profile unavailable", http.StatusInternalServerError)
+		return
+	}
+	if profile.DisplayName == "" {
+		profile.DisplayName = userID
+	}
+	queuePool := matchstore.PoolForGuest(profile.IsGuest)
+
+	queued, err := q.store.IsQueued(queuePool, userID)
+	if err != nil {
+		http.Error(w, "queue unavailable", http.StatusBadGateway)
+		return
+	}
+
+	var found *contracts.MatchFound
+	if !queued {
+		_, found, err = q.store.Join(queuePool, contracts.QueueJoinRequest{
+			UserID:            userID,
+			DisplayName:       profile.DisplayName,
+			AvatarURL:         profile.AvatarURL,
+			MMR:               profile.MMR,
+			RatingRD:          profile.RatingRD,
+			RankedGamesPlayed: profile.RankedGamesPlayed,
+			IsGuest:           profile.IsGuest,
+			IsAdmin:           profile.IsAdmin,
+		})
+		if err != nil {
+			http.Error(w, "queue unavailable", http.StatusBadGateway)
+			return
+		}
+	}
+
+	if !q.writeQueueMessage(conn, &writeMu, "queue_status", contracts.QueueStatusEvent{
+		Status:   "queued",
+		QueuedAt: time.Now().UnixMilli(),
+	}) {
+		return
+	}
+
+	pollTicker := time.NewTicker(500 * time.Millisecond)
+	defer pollTicker.Stop()
+	heartbeatTicker := time.NewTicker(10 * time.Second)
+	defer heartbeatTicker.Stop()
+	pingTicker := time.NewTicker(20 * time.Second)
+	defer pingTicker.Stop()
+	assigned := false
+	defer func() {
+		if !assigned {
+			_ = q.store.Leave(queuePool, userID)
+		}
+	}()
+
+	for {
+		if found == nil {
+			found, err = q.store.Poll(queuePool, userID)
+			if err != nil {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_POLL_FAILED", "message": "queue poll failed"})
+				return
+			}
+		}
+		if found != nil {
+			if q.matchEnded(found.MatchID) {
+				q.clearQueuedMatch(context.Background(), found.Players)
+				found = nil
+				continue
+			}
+			rec, err := q.launcher().EnsureAssignment(r.Context(), *found)
+			if err != nil {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "MATCH_ASSIGN_FAILED", "message": err.Error()})
+				return
+			}
+			payload, ok, err := q.launcher().AssignedPayload(userID, rec)
+			if err != nil || !ok {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "MATCH_ASSIGN_FAILED", "message": "unable to issue gameplay ticket"})
+				return
+			}
+			assigned = true
+			q.writeQueueMessage(conn, &writeMu, "match_assigned", payload)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-pollTicker.C:
+		case <-heartbeatTicker.C:
+			q.touchPresence(userID)
+			status, err := q.store.Heartbeat(queuePool, userID)
+			if err != nil {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_HEARTBEAT_FAILED", "message": "queue heartbeat failed"})
+				return
+			}
+			if status == matchstore.QueuePresenceMissing {
+				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_EXPIRED", "message": "Queue expired. Please re-queue."})
+				return
+			}
+		case <-pingTicker.C:
+			if !q.writeQueuePing(conn, &writeMu) {
+				return
+			}
+		}
+	}
+}
+
+func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
+	claims, err := q.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	identity, err := q.persist.GetIdentity(claims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return
+	}
+	if !identity.Onboarded {
+		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+		return
+	}
+	q.touchPresence(claims.Sub)
+
+	status, err := q.store.Heartbeat(matchstore.PoolForGuest(identity.AccountType == "guest"), claims.Sub)
+	if err != nil {
+		http.Error(w, "queue unavailable", http.StatusBadGateway)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
+}
+
+func (q *matchCoordinator) matchEnded(matchID string) bool {
+	if matchID == "" {
+		return false
+	}
+	rec, ok, err := q.persist.GetRuntimeMatch(matchID)
+	if err != nil {
+		log.Printf("runtime match lookup failed for %s: %v", matchID, err)
+		return false
+	}
+	return ok && rec.State == string(contracts.MatchEnded)
+}
+
+func (q *matchCoordinator) clearQueuedMatch(ctx context.Context, players []string) {
+	if q.redis == nil || len(players) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(players))
+	for _, userID := range players {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		keys = append(keys, matchstore.QueueMatchKeysForUsers([]string{userID})...)
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := q.redis.Del(ctx, keys...).Err(); err != nil {
+		log.Printf("clear queued match failed for %v: %v", players, err)
+	}
+}
+
+func (q *matchCoordinator) online(w http.ResponseWriter, r *http.Request) {
+	total, err := q.state.CountPresentUsers(r.Context())
+	if err != nil {
+		http.Error(w, "unavailable", http.StatusBadGateway)
+		return
+	}
+	status, err := q.maintenanceStatus(r.Context())
+	if err != nil {
+		http.Error(w, "unavailable", http.StatusBadGateway)
+		return
+	}
+	resp := map[string]any{"online": total}
+	if status.IsVisible() {
+		resp["maintenance"] = status
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (q *matchCoordinator) touchPresence(userID string) {
+	if err := q.state.TouchPresence(context.Background(), userID); err != nil {
+		log.Printf("presence touch failed for %s: %v", userID, err)
+	}
+}
+
+func (q *matchCoordinator) launcher() matchlaunch.Launcher {
+	return matchlaunch.Launcher{
+		Coord:          q.state,
+		Persist:        q.persist,
+		HTTPClient:     q.httpClient,
+		TicketSecret:   q.ticketAuth,
+		InternalSecret: q.internal,
+	}
+}
+
+func (q *matchCoordinator) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {
+	authz := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(authz, "Bearer ") {
+		return auth.ValidateAppAccessToken(q.appSecret, strings.TrimSpace(strings.TrimPrefix(authz, "Bearer ")))
+	}
+	accessToken := strings.TrimSpace(r.URL.Query().Get("accessToken"))
+	if accessToken == "" {
+		return auth.AppClaims{}, errors.New("missing bearer token")
+	}
+	return auth.ValidateAppAccessToken(q.appSecret, accessToken)
+}
+
+func (q *matchCoordinator) writeQueueMessage(conn *websocket.Conn, writeMu *sync.Mutex, event string, payload any) bool {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return conn.WriteJSON(map[string]any{
+		"type":    event,
+		"payload": payload,
+	}) == nil
+}
+
+func (q *matchCoordinator) writeQueuePing(conn *websocket.Conn, writeMu *sync.Mutex) bool {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)) == nil
+}
+
+func (q *matchCoordinator) healthLive(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+func (q *matchCoordinator) healthReady(w http.ResponseWriter, _ *http.Request) {
+	if q.draining.Load() {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := q.redis.Ping(ctx).Err(); err != nil {
+		http.Error(w, "redis not ready", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready"))
+}
+
+func (q *matchCoordinator) maintenanceStatus(ctx context.Context) (maintenance.Status, error) {
+	readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	return maintenance.Read(readCtx, q.redis)
+}
+
+func maintenanceQueueMessage(status maintenance.Status) string {
+	if status.Message != "" {
+		return status.Message
+	}
+	switch status.Phase {
+	case maintenance.PhaseActive:
+		return "Maintenance in progress. Queueing is temporarily unavailable."
+	case maintenance.PhaseWarning:
+		return "Queueing has been paused for scheduled maintenance."
+	default:
+		return "Queue unavailable"
+	}
+}
+
+func (q *matchCoordinator) handleShutdown(srv *http.Server) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+
+	<-sigCh
+	q.draining.Store(true)
+	time.Sleep(20 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("match-coordinator shutdown failed: %v", err)
+	}
+}
+
+func redisFromEnv() (*redis.Client, func(), error) {
+	url := getenv("REDIS_URL", "")
+	if url == "" {
+		return nil, nil, errors.New("REDIS_URL is required")
+	}
+	opt, err := redis.ParseURL(url)
+	if err != nil {
+		return nil, nil, err
+	}
+	rdb := redis.NewClient(opt)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return nil, nil, err
+	}
+	return rdb, func() { _ = rdb.Close() }, nil
+}
+
+func cors(next http.Handler) http.Handler {
+	allowed := allowedOriginsSet()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" && (allowed["*"] || allowed[origin]) {
+			if allowed["*"] {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowedOriginsSet() map[string]bool {
+	raw := getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+	out := map[string]bool{}
+	for _, s := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(s)
+		if origin == "" {
+			continue
+		}
+		out[origin] = true
+	}
+	return out
+}
+
+func wsOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	allowed := allowedOriginsSet()
+	return allowed["*"] || allowed[origin]
+}
+
+func getenv(k, fallback string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func getenvDuration(k string, fallback time.Duration) time.Duration {
+	v := os.Getenv(k)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+func getenvInt(k string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func requiredSecret(k string, minLen int) ([]byte, error) {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return nil, errors.New(k + " is required")
+	}
+	if len(v) < minLen {
+		return nil, errors.New(k + " must be at least " + strconv.Itoa(minLen) + " characters")
+	}
+	return []byte(v), nil
+}
