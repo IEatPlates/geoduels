@@ -1,4 +1,4 @@
-export const INITIAL_MMR = 1500;
+export const INITIAL_MMR = 1000;
 export const INITIAL_RATING_RD = 220;
 export const MAX_DUEL_MMR_DELTA = 80;
 

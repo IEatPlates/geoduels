@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	InitialMMR       = 1500
+	InitialMMR       = 1000
 	InitialRatingRD  = 220.0
 	MinimumRatingRD  = 110.0
 	MaximumRatingRD  = 220.0

@@ -55,7 +55,7 @@ create index if not exists idx_auth_sessions_expires_at on auth_sessions(expires
 create table if not exists ranks (
   user_id text not null references users(id),
   mode text not null,
-  mmr integer not null default 1500,
+  mmr integer not null default 1000,
   season_id text not null,
   updated_at timestamptz not null default now(),
   primary key (user_id, mode, season_id)
