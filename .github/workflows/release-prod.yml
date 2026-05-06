@@ -141,6 +141,7 @@ jobs:
   update-ops-repo:
     name: update-ops-repo
     runs-on: ubuntu-latest
+    environment: production
     needs:
       - release-meta
       - build-and-push-amd64
