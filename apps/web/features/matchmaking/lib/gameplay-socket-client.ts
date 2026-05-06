@@ -1,4 +1,4 @@
-import type { Snapshot } from '../../../components/ui/types';
+import type { ChatMessage, Snapshot } from '../../../components/ui/types';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { normalizeWSBase } from '../../../lib/runtime-config';
 import type { AuthSessionSnapshot } from '../../auth/session';
@@ -9,6 +9,7 @@ type Handlers = {
   onError: () => void;
   onActivity: () => void;
   onSnapshot: (snapshot: Snapshot) => void;
+  onChatMessage: (message: ChatMessage) => void;
   onAckError: (message: string) => void;
   onProtocolError: () => void;
 };
@@ -71,9 +72,14 @@ export class GameplaySocketClient {
         return;
       }
       if (
-        msg.kind !== 'event' ||
-        !['match.snapshot', 'match.state', 'match.lifecycle.v2.snapshot'].includes(msg.type)
+        msg.kind !== 'event'
       ) return;
+      if (msg.type === 'chat.message') {
+        this.handlers.onActivity();
+        this.handlers.onChatMessage(msg.payload as ChatMessage);
+        return;
+      }
+      if (!['match.snapshot', 'match.state', 'match.lifecycle.v2.snapshot'].includes(msg.type)) return;
       const snapshot = msg.payload as Snapshot;
       const serverTs = typeof msg.serverTs === 'number' && Number.isFinite(msg.serverTs) ? msg.serverTs : undefined;
       this.handlers.onSnapshot(serverTs === undefined ? snapshot : { ...snapshot, serverUnixMs: serverTs });

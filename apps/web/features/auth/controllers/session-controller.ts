@@ -30,7 +30,7 @@ type AuthPopupPayload = {
 type SessionNetworkHandlers = {
   bootstrapSession: () => Promise<AuthSessionSnapshot | null>;
   refreshSession: () => Promise<AuthSessionSnapshot | null>;
-  getPlayableSession: (nickname: string) => Promise<AuthSessionSnapshot | null>;
+  getPlayableSession: () => Promise<AuthSessionSnapshot | null>;
 };
 
 type SessionPatch = Partial<
@@ -441,7 +441,7 @@ export class SessionController extends ObservableStore<SessionState> {
     if (this.session.onboardingRequired) {
       return null;
     }
-    return this.networkHandlers.getPlayableSession(this.session.nicknameInput);
+    return this.networkHandlers.getPlayableSession();
   };
 
   setAuthPending(

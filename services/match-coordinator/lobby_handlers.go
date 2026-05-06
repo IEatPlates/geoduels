@@ -43,6 +43,7 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	snap = q.lobbySettings.Apply(r.Context(), snap)
 	conn, err := lobbyUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -88,6 +89,7 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 				q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "Lobby unavailable"})
 				return
 			}
+			next = q.lobbySettings.Apply(ctx, next)
 			if !lobbyHasMember(next, claims.Sub) {
 				q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "You left this lobby"})
 				return
@@ -134,6 +136,7 @@ func (q *matchCoordinator) startLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby not found", http.StatusNotFound)
 		return
 	}
+	snap = q.lobbySettings.Apply(r.Context(), snap)
 	if snap.OwnerUserID != claims.Sub {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -260,6 +263,7 @@ func (q *matchCoordinator) lobbyMatchFound(snap contracts.LobbySnapshot) (contra
 		Unranked:              true,
 		Players:               []string{active[0].UserID, active[1].UserID},
 		Profiles:              map[string]contracts.PlayerProfile{},
+		Config:                contracts.NormalizeMatchConfig(snap.Config),
 		MapScope:              defaultLobbyMapScope(snap.MapScope),
 		SourceLobbyID:         snap.ID,
 		SourceLobbyInviteCode: snap.InviteCode,

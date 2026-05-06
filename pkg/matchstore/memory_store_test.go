@@ -28,7 +28,7 @@ func newMemory() Store {
 	}
 }
 
-func (m *memoryStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (m *memoryStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	queue := m.queues[pool]
@@ -56,6 +56,7 @@ func (m *memoryStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (cont
 		RatingRD:          req.RatingRD,
 		RankedGamesPlayed: req.RankedGamesPlayed,
 		IsGuest:           req.IsGuest,
+		Ruleset:           contracts.NormalizeRuleset(ruleset),
 		JoinedAtUnixMS:    time.Now().UnixMilli(),
 	}
 	queue = append(queue, t)
@@ -64,11 +65,15 @@ func (m *memoryStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (cont
 	return contracts.QueueJoinResponse{TicketID: t.ID, Status: "queued"}, nil, nil
 }
 
-func (m *memoryStore) Leave(pool QueuePool, userID string) error {
+func (m *memoryStore) Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.leaveLocked(pool, userID)
 	return nil
+}
+
+func (m *memoryStore) LeaveAllRulesets(pool QueuePool, userID string) error {
+	return m.Leave(pool, nil, userID)
 }
 
 func (m *memoryStore) leaveLocked(pool QueuePool, userID string) {
@@ -83,7 +88,7 @@ func (m *memoryStore) leaveLocked(pool QueuePool, userID string) {
 	delete(m.matches[pool], userID)
 }
 
-func (m *memoryStore) Heartbeat(pool QueuePool, userID string) (string, error) {
+func (m *memoryStore) Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.matches[pool][userID]; ok {
@@ -97,7 +102,7 @@ func (m *memoryStore) Heartbeat(pool QueuePool, userID string) (string, error) {
 	return QueuePresenceMissing, nil
 }
 
-func (m *memoryStore) Poll(pool QueuePool, userID string) (*contracts.MatchFound, error) {
+func (m *memoryStore) Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mf, ok := m.matches[pool][userID]
@@ -108,7 +113,7 @@ func (m *memoryStore) Poll(pool QueuePool, userID string) (*contracts.MatchFound
 	return &mf, nil
 }
 
-func (m *memoryStore) IsQueued(pool QueuePool, userID string) (bool, error) {
+func (m *memoryStore) IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.queues[pool] {
@@ -119,7 +124,7 @@ func (m *memoryStore) IsQueued(pool QueuePool, userID string) (bool, error) {
 	return false, nil
 }
 
-func (m *memoryStore) RunMatchmaking(pool QueuePool, limit int) (int, error) {
+func (m *memoryStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if limit <= 0 {

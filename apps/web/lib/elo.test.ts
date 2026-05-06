@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateDuelEloDeltas, MAX_DUEL_MMR_DELTA } from './elo';
+import { calculateDuelEloDeltas, INITIAL_MMR, MAX_DUEL_MMR_DELTA } from './elo';
 
 describe('calculateDuelEloDeltas', () => {
   it('moves high-RD players quickly and lowers rating uncertainty', () => {
@@ -18,5 +18,22 @@ describe('calculateDuelEloDeltas', () => {
     expect(result.selfDelta).toBeLessThanOrEqual(32);
     expect(result.opponentDelta).toBeLessThanOrEqual(-28);
     expect(result.opponentDelta).toBeGreaterThanOrEqual(-32);
+  });
+
+  it('starts ranked players at 500 MMR', () => {
+    expect(INITIAL_MMR).toBe(500);
+  });
+
+  it('forgives losses while players are below 1000 MMR', () => {
+    const low = calculateDuelEloDeltas(600, 600, 'self', 110, 110);
+    const nearExit = calculateDuelEloDeltas(900, 900, 'self', 110, 110);
+    const regular = calculateDuelEloDeltas(1000, 1000, 'self', 110, 110);
+
+    expect(low.opponentDelta).toBeGreaterThanOrEqual(-8);
+    expect(low.opponentDelta).toBeLessThanOrEqual(-4);
+    expect(nearExit.opponentDelta).toBeGreaterThanOrEqual(-26);
+    expect(nearExit.opponentDelta).toBeLessThanOrEqual(-22);
+    expect(regular.opponentDelta).toBeGreaterThanOrEqual(-32);
+    expect(regular.opponentDelta).toBeLessThanOrEqual(-28);
   });
 });

@@ -120,6 +120,7 @@ export default function AdminPage() {
   const [query, setQuery] = useState("");
   const [banReason, setBanReason] = useState<Record<string, string>>({});
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedMapKey, setSelectedMapKey] = useState("a-source-world");
   const [mapStatus, setMapStatus] = useState("");
   const [draftEyebrow, setDraftEyebrow] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
@@ -399,8 +400,8 @@ export default function AdminPage() {
   });
 
   const uploadMapMutation = useMutation({
-    mutationFn: async (file: File) =>
-      requestAdminUploadCurrentMap(config, accessToken, file),
+    mutationFn: async (params: { file: File; mapKey: string }) =>
+      requestAdminUploadCurrentMap(config, accessToken, params.file, params.mapKey),
     onSuccess: async (data: { revisionId?: string; rowCount?: number }) => {
       setMapStatus(
         `Uploaded revision ${data.revisionId || "unknown"} with ${data.rowCount || 0} rows.`,
@@ -592,12 +593,23 @@ export default function AdminPage() {
                   <section className="rounded-[24px] border border-white/10 bg-white/5 p-5">
                     <h2 className="text-lg font-black">Map update</h2>
                     <p className="mt-2 text-sm text-[#a9bfd4]">
-                      Upload a JSON file for the current live map key.
+                      Upload a JSON file for a live map key.
                     </p>
+                    <select
+                      value={selectedMapKey}
+                      onChange={(event) => {
+                        setSelectedMapKey(event.target.value);
+                        setMapStatus("");
+                      }}
+                      className="mt-4 min-h-11 w-full rounded-xl border border-white/10 bg-[#0d141c] px-3 text-sm text-white outline-none focus:border-[#2ad18f]/60"
+                    >
+                      <option value="a-source-world">A Source World</option>
+                      <option value="a-location-world">A Location World</option>
+                    </select>
                     <input
                       type="file"
                       accept=".json,application/json"
-                      className="mt-4 block w-full rounded-xl border border-white/10 bg-[#0d141c] p-3 text-sm"
+                      className="mt-3 block w-full rounded-xl border border-white/10 bg-[#0d141c] p-3 text-sm"
                       onChange={(event) => {
                         setSelectedFile(event.target.files?.[0] || null);
                         setMapStatus("");
@@ -608,7 +620,7 @@ export default function AdminPage() {
                       disabled={!selectedFile || uploadMapMutation.isPending}
                       onClick={() => {
                         if (selectedFile) {
-                          void uploadMapMutation.mutateAsync(selectedFile);
+                          void uploadMapMutation.mutateAsync({ file: selectedFile, mapKey: selectedMapKey });
                         }
                       }}
                       className="mt-4 min-h-11 rounded-xl bg-[#2ad18f] px-4 py-2 text-sm font-bold text-[#08111b] transition disabled:cursor-not-allowed disabled:opacity-60"

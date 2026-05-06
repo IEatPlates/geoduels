@@ -183,10 +183,12 @@ type RuntimeMatch struct {
 	EndedAt    time.Time
 }
 
+type MatchChatMessage = contracts.MatchChatMessage
+
 type Store interface {
 	UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error)
 	GoogleIdentityExists(googleSub string) (bool, error)
-	CreateGuestIdentity(displayName string) (Identity, error)
+	CreateGuestIdentity() (Identity, error)
 	GetIdentity(sub string) (Identity, error)
 	CompleteOnboarding(sub, email, displayName string) error
 	UpdateDisplayName(sub, displayName string) error
@@ -229,6 +231,8 @@ type Store interface {
 	IsSignupIPBanned(ipAddress string) (bool, error)
 	GetRuntimeMatch(matchID string) (RuntimeMatch, bool, error)
 	RecordRuntimeMatch(matchID, state string, ownerEpoch int64, terminal bool) error
+	RecordMatchChatMessage(message MatchChatMessage) error
+	ListMatchChatMessages(matchID string, limit int) ([]MatchChatMessage, error)
 	ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error
 	ExpireOpenLobbies() error
 	ListOpenLobbyIDs() ([]string, error)
@@ -419,12 +423,9 @@ func (s *pgStore) GoogleIdentityExists(googleSub string) (bool, error) {
 	return exists, nil
 }
 
-func (s *pgStore) CreateGuestIdentity(displayName string) (Identity, error) {
+func (s *pgStore) CreateGuestIdentity() (Identity, error) {
 	userID := newUserID()
-	if displayName == "" {
-		displayName = "Guest"
-	}
-	if err := s.UpsertUser(userID, "", displayName); err != nil {
+	if err := s.UpsertUser(userID, "", "Guest"); err != nil {
 		return Identity{}, err
 	}
 	return s.GetIdentity(userID)
@@ -523,6 +524,7 @@ func (s *pgStore) UpdateDisplayName(sub, displayName string) error {
 		update users
 		set display_name = $2
 		where id = $1
+		  and coalesce(account_type, 'registered') <> 'guest'
 	`, sub, displayName)
 	if err != nil {
 		return err
@@ -3076,6 +3078,61 @@ func (s *pgStore) RecordRuntimeMatch(matchID, state string, ownerEpoch int64, te
 			owner_epoch = excluded.owner_epoch
 	`, matchID, state, ownerEpoch)
 	return err
+}
+
+func (s *pgStore) RecordMatchChatMessage(message MatchChatMessage) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	body := nullable(message.Body)
+	emote := nullable(string(message.Emote))
+	createdAt := message.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	_, err := s.pool.Exec(ctx, `
+		insert into match_chat_messages (
+			id, match_id, sender_user_id, sender_display_name, kind, body, emote, created_at
+		)
+		values ($1, $2, $3, $4, $5, $6, $7, $8)
+		on conflict (id) do nothing
+	`, message.ID, message.MatchID, message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, createdAt)
+	return err
+}
+
+func (s *pgStore) ListMatchChatMessages(matchID string, limit int) ([]MatchChatMessage, error) {
+	matchID = strings.TrimSpace(matchID)
+	if matchID == "" {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		select id, match_id, sender_user_id, sender_display_name, kind, coalesce(body, ''), coalesce(emote, ''), created_at
+		from match_chat_messages
+		where match_id = $1
+		order by created_at asc
+		limit $2
+	`, matchID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []MatchChatMessage{}
+	for rows.Next() {
+		var message MatchChatMessage
+		var kind string
+		var emote string
+		if err := rows.Scan(&message.ID, &message.MatchID, &message.SenderUserID, &message.SenderDisplayName, &kind, &message.Body, &emote, &message.CreatedAt); err != nil {
+			return nil, err
+		}
+		message.Kind = contracts.ChatMessageKind(kind)
+		message.Emote = contracts.ChatEmote(emote)
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
 }
 
 func (s *pgStore) ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error {

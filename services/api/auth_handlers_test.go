@@ -21,11 +21,11 @@ type guestAuthTestStore struct {
 	sessions      map[string]persistence.RefreshTokenRecord
 }
 
-func (s *guestAuthTestStore) CreateGuestIdentity(displayName string) (persistence.Identity, error) {
+func (s *guestAuthTestStore) CreateGuestIdentity() (persistence.Identity, error) {
 	s.createdGuests++
 	s.identity = persistence.Identity{
 		Sub:         "guest-1",
-		DisplayName: displayName,
+		DisplayName: "Guest",
 		Onboarded:   true,
 		AccountType: "guest",
 	}
@@ -92,7 +92,7 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 		guestSignupIPWindow:   time.Minute,
 	}
 
-	firstReq := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", strings.NewReader(`{"nickname":"One"}`))
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", nil)
 	firstRec := httptest.NewRecorder()
 	a.guestLogin(firstRec, firstReq)
 	if firstRec.Code != http.StatusOK {
@@ -106,7 +106,7 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 		t.Fatal("expected refresh cookie")
 	}
 
-	secondReq := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", strings.NewReader(`{"nickname":"Two"}`))
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", nil)
 	secondReq.AddCookie(cookie)
 	secondRec := httptest.NewRecorder()
 	a.guestLogin(secondRec, secondReq)
@@ -115,6 +115,35 @@ func TestGuestLoginReusesExistingRefreshSession(t *testing.T) {
 	}
 	if store.createdGuests != 1 {
 		t.Fatalf("guest login should reuse cookie session, created guests = %d", store.createdGuests)
+	}
+}
+
+func TestGuestLoginIgnoresNicknamePayload(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	store := &guestAuthTestStore{}
+	a := &api{
+		store:                 store,
+		redis:                 rdb,
+		appAuthSecret:         []byte("01234567890123456789012345678901"),
+		accessTokenTTL:        15 * time.Minute,
+		refreshTokenTTL:       30 * 24 * time.Hour,
+		refreshCookieName:     "geoduels_refresh",
+		refreshCookieSameSite: http.SameSiteLaxMode,
+		guestSignupIPLimit:    1,
+		guestSignupIPWindow:   time.Minute,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", strings.NewReader(`{"nickname":"Custom"}`))
+	rec := httptest.NewRecorder()
+	a.guestLogin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("guest login status = %d", rec.Code)
+	}
+	if store.identity.DisplayName != "Guest" {
+		t.Fatalf("guest display name = %q, want Guest", store.identity.DisplayName)
 	}
 }
 
@@ -137,7 +166,7 @@ func TestGuestLoginRateLimitsNewGuestsByIP(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", strings.NewReader(`{"nickname":"Guest"}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", nil)
 		req.RemoteAddr = "203.0.113.10:12345"
 		rec := httptest.NewRecorder()
 		a.guestLogin(rec, req)
@@ -146,7 +175,7 @@ func TestGuestLoginRateLimitsNewGuestsByIP(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", strings.NewReader(`{"nickname":"Guest"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/guest", nil)
 	req.RemoteAddr = "203.0.113.10:12345"
 	rec := httptest.NewRecorder()
 	a.guestLogin(rec, req)

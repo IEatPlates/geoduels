@@ -136,6 +136,12 @@ export type RatingDeltaPreview = {
 export type Snapshot = {
   matchId: string;
   mode?: "duel" | "singleplayer";
+  config?: {
+    ruleset?: "moving" | "nmpz";
+    mapKey?: string;
+    roundTimerMode?: "pressure" | "fixed";
+    roundTimeLimitMs?: number;
+  };
   unranked?: boolean;
   state: string;
   phase: "live" | "round_result" | "ended";
@@ -165,6 +171,19 @@ export type Snapshot = {
   eventSequence: number;
   serverUnixMs?: number;
   graceWindowSec?: number;
+};
+
+export type ChatEmote = "skull" | "sob" | "thinking" | "sunglasses";
+
+export type ChatMessage = {
+  id: string;
+  matchId: string;
+  senderUserId: string;
+  senderDisplayName: string;
+  kind: "text" | "emote";
+  body?: string;
+  emote?: ChatEmote;
+  createdAt: string;
 };
 
 export type UIPhase =

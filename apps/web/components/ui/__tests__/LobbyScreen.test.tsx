@@ -83,6 +83,18 @@ describe('LobbyScreen', () => {
     expect(screen.getByRole('button', { name: 'Paused' })).toBeDisabled();
   });
 
+  it('allows all duel modes to be unselected and disables play', () => {
+    renderLobbyScreen();
+
+    const playButton = screen.getAllByRole('button', { name: 'Play' })[0];
+    expect(playButton).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Moving' }));
+
+    expect(screen.getByRole('button', { name: 'Moving' })).toHaveAttribute('aria-pressed', 'false');
+    expect(playButton).toBeDisabled();
+  });
+
   it('replaces the tabbed lobby content when an invite lobby is active', () => {
     renderLobbyScreen({
       privateLobby: {

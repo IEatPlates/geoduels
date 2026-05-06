@@ -164,6 +164,29 @@ func (a *api) adminPlayerMatches(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"matches": matches})
 }
 
+func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.moderatorIdentity(r); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	messages, err := a.store.ListMatchChatMessages(strings.TrimSpace(mux.Vars(r)["id"]), limit)
+	if err != nil {
+		http.Error(w, "chat log unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages})
+}
+
 func (a *api) adminModerationCase(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.moderatorIdentity(r)
 	if err != nil {
@@ -568,6 +591,19 @@ func (a *api) adminPutChangelog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) adminUploadCurrentMap(w http.ResponseWriter, r *http.Request) {
+	a.uploadMap(w, r, contracts.MapKeyMoving)
+}
+
+func (a *api) adminUploadMap(w http.ResponseWriter, r *http.Request) {
+	mapKey := strings.TrimSpace(mux.Vars(r)["mapKey"])
+	if mapKey != contracts.MapKeyMoving && mapKey != contracts.MapKeyNMPZ {
+		http.Error(w, "unsupported map key", http.StatusBadRequest)
+		return
+	}
+	a.uploadMap(w, r, mapKey)
+}
+
+func (a *api) uploadMap(w http.ResponseWriter, r *http.Request, mapKey string) {
 	if _, err := a.adminIdentity(r); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -587,7 +623,7 @@ func (a *api) adminUploadCurrentMap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read file", http.StatusBadRequest)
 		return
 	}
-	summary, err := a.store.ActivateMapRevision(a.locationMapKey, a.locationMapKey, dataset)
+	summary, err := a.store.ActivateMapRevision(mapKey, mapKey, dataset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

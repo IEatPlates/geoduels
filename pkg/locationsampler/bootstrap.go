@@ -6,7 +6,11 @@ import (
 )
 
 func NewFromEnv(ctx context.Context, cfg Config) (*Sampler, func(), error) {
-	db, err := NewDBStoreFromEnv()
+	return NewFromEnvForMapKey(ctx, "", cfg)
+}
+
+func NewFromEnvForMapKey(ctx context.Context, mapKey string, cfg Config) (*Sampler, func(), error) {
+	db, err := NewDBStoreFromEnvForMapKey(mapKey)
 	if err != nil {
 		return nil, nil, err
 	}

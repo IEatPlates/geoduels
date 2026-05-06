@@ -31,16 +31,17 @@ type NodeRecord struct {
 }
 
 type Assignment struct {
-	MatchID               string              `json:"matchId"`
-	Mode                  contracts.MatchMode `json:"mode,omitempty"`
-	NodeID                string              `json:"nodeId"`
-	NodeEpoch             int64               `json:"nodeEpoch,omitempty"`
-	PublicRoute           string              `json:"publicRoute"`
-	Players               []string            `json:"players"`
-	UpdatedAt             int64               `json:"updatedAt"`
-	RecoverableUntil      int64               `json:"recoverableUntil,omitempty"`
-	SourceLobbyID         string              `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string              `json:"sourceLobbyInviteCode,omitempty"`
+	MatchID               string                `json:"matchId"`
+	Mode                  contracts.MatchMode   `json:"mode,omitempty"`
+	Config                contracts.MatchConfig `json:"config,omitempty"`
+	NodeID                string                `json:"nodeId"`
+	NodeEpoch             int64                 `json:"nodeEpoch,omitempty"`
+	PublicRoute           string                `json:"publicRoute"`
+	Players               []string              `json:"players"`
+	UpdatedAt             int64                 `json:"updatedAt"`
+	RecoverableUntil      int64                 `json:"recoverableUntil,omitempty"`
+	SourceLobbyID         string                `json:"sourceLobbyId,omitempty"`
+	SourceLobbyInviteCode string                `json:"sourceLobbyInviteCode,omitempty"`
 }
 
 type Store struct {

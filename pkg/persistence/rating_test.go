@@ -69,6 +69,57 @@ func TestCalculateDuelRatingUpdatesEqualEstablishedWinGainsAboutThirty(t *testin
 	}
 }
 
+func TestCalculateDuelRatingUpdatesForgivesLowMMRLosses(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	_, loser600 := CalculateDuelRatingUpdates(
+		RatingState{MMR: 600, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: 600, RD: minimumRatingRD, UpdatedAt: now},
+		"p1",
+		now,
+	)
+	_, loser900 := CalculateDuelRatingUpdates(
+		RatingState{MMR: 900, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: 900, RD: minimumRatingRD, UpdatedAt: now},
+		"p1",
+		now,
+	)
+	_, loser1000 := CalculateDuelRatingUpdates(
+		RatingState{MMR: 1000, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: 1000, RD: minimumRatingRD, UpdatedAt: now},
+		"p1",
+		now,
+	)
+
+	if loser600.Delta > -4 || loser600.Delta < -8 {
+		t.Fatalf("expected 600 MMR loser to lose about 20%% of a normal loss, got %d", loser600.Delta)
+	}
+	if loser900.Delta > -22 || loser900.Delta < -26 {
+		t.Fatalf("expected 900 MMR loser to lose about 80%% of a normal loss, got %d", loser900.Delta)
+	}
+	if loser1000.Delta > -28 || loser1000.Delta < -32 {
+		t.Fatalf("expected 1000 MMR loser to take the regular loss, got %d", loser1000.Delta)
+	}
+}
+
+func TestCalculateDuelRatingUpdatesKeepsMinimumMMRAtFiveHundred(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	_, loser := CalculateDuelRatingUpdates(
+		RatingState{MMR: initialMMR, RD: minimumRatingRD, UpdatedAt: now},
+		RatingState{MMR: initialMMR, RD: minimumRatingRD, UpdatedAt: now},
+		"p1",
+		now,
+	)
+
+	if initialMMR != 500 {
+		t.Fatalf("expected initial MMR to be 500, got %d", initialMMR)
+	}
+	if loser.MMR != minimumRankedMMR {
+		t.Fatalf("expected loser to stay clamped at %d, got %d", minimumRankedMMR, loser.MMR)
+	}
+}
+
 func TestCalculateDuelRatingUpdatesHighRDExpectedLossMovesMoreThanSettledLoss(t *testing.T) {
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 

@@ -22,6 +22,7 @@ import (
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
+	"geoduels/pkg/lobbysettings"
 	"geoduels/pkg/maintenance"
 	"geoduels/pkg/matchlaunch"
 	"geoduels/pkg/matchstore"
@@ -31,16 +32,17 @@ import (
 )
 
 type matchCoordinator struct {
-	store      matchstore.Store
-	state      *coordinator.Store
-	persist    persistence.Store
-	redis      *redis.Client
-	httpClient *http.Client
-	appSecret  []byte
-	ticketAuth []byte
-	internal   string
-	metrics    *observability.APIMetrics
-	draining   atomic.Bool
+	store         matchstore.Store
+	state         *coordinator.Store
+	persist       persistence.Store
+	redis         *redis.Client
+	lobbySettings *lobbysettings.Store
+	httpClient    *http.Client
+	appSecret     []byte
+	ticketAuth    []byte
+	internal      string
+	metrics       *observability.APIMetrics
+	draining      atomic.Bool
 }
 
 var queueUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
@@ -82,15 +84,16 @@ func main() {
 	}
 
 	q := &matchCoordinator{
-		store:      store,
-		state:      coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
-		persist:    persist,
-		redis:      rdb,
-		httpClient: &http.Client{Timeout: 3 * time.Second},
-		appSecret:  appSecret,
-		ticketAuth: ticketSecret,
-		internal:   internalSecret,
-		metrics:    observability.NewAPIMetrics(),
+		store:         store,
+		state:         coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
+		persist:       persist,
+		redis:         rdb,
+		lobbySettings: lobbysettings.New(rdb, 2*time.Hour),
+		httpClient:    &http.Client{Timeout: 3 * time.Second},
+		appSecret:     appSecret,
+		ticketAuth:    ticketSecret,
+		internal:      internalSecret,
+		metrics:       observability.NewAPIMetrics(),
 	}
 	defer q.persist.Close()
 	defer redisCleanup()
@@ -150,8 +153,10 @@ func (q *matchCoordinator) runMatchmakingLoop(interval time.Duration, batchSize 
 			continue
 		}
 		for _, pool := range matchstore.AllQueuePools() {
-			if _, err := q.store.RunMatchmaking(pool, batchSize); err != nil {
-				observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(pool), "error": err.Error()})
+			for _, ruleset := range []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ} {
+				if _, err := q.store.RunMatchmaking(pool, ruleset, batchSize); err != nil {
+					observability.Log("warn", "matchmaking tick failed", map[string]any{"pool": string(pool), "ruleset": string(ruleset), "error": err.Error()})
+				}
 			}
 		}
 	}
@@ -253,16 +258,16 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		profile.DisplayName = userID
 	}
 	queuePool := matchstore.PoolForGuest(profile.IsGuest)
+	selectedRulesets := parseQueueRulesets(r.URL.Query().Get("rulesets"))
 
-	queued, err := q.store.IsQueued(queuePool, userID)
-	if err != nil {
+	if err := q.store.LeaveAllRulesets(queuePool, userID); err != nil {
 		http.Error(w, "queue unavailable", http.StatusBadGateway)
 		return
 	}
 
 	var found *contracts.MatchFound
-	if !queued {
-		_, found, err = q.store.Join(queuePool, contracts.QueueJoinRequest{
+	for _, ruleset := range selectedRulesets {
+		_, nextFound, err := q.store.Join(queuePool, ruleset, contracts.QueueJoinRequest{
 			UserID:            userID,
 			DisplayName:       profile.DisplayName,
 			AvatarURL:         profile.AvatarURL,
@@ -275,6 +280,9 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, "queue unavailable", http.StatusBadGateway)
 			return
+		}
+		if found == nil {
+			found = nextFound
 		}
 	}
 
@@ -294,13 +302,13 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	assigned := false
 	defer func() {
 		if !assigned {
-			_ = q.store.Leave(queuePool, userID)
+			_ = q.store.Leave(queuePool, selectedRulesets, userID)
 		}
 	}()
 
 	for {
 		if found == nil {
-			found, err = q.store.Poll(queuePool, userID)
+			found, err = q.store.Poll(queuePool, selectedRulesets, userID)
 			if err != nil {
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_POLL_FAILED", "message": "queue poll failed"})
 				return
@@ -333,7 +341,7 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		case <-pollTicker.C:
 		case <-heartbeatTicker.C:
 			q.touchPresence(userID)
-			status, err := q.store.Heartbeat(queuePool, userID)
+			status, err := q.store.Heartbeat(queuePool, selectedRulesets, userID)
 			if err != nil {
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_HEARTBEAT_FAILED", "message": "queue heartbeat failed"})
 				return
@@ -367,12 +375,32 @@ func (q *matchCoordinator) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	q.touchPresence(claims.Sub)
 
-	status, err := q.store.Heartbeat(matchstore.PoolForGuest(identity.AccountType == "guest"), claims.Sub)
+	status, err := q.store.Heartbeat(matchstore.PoolForGuest(identity.AccountType == "guest"), []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}, claims.Sub)
 	if err != nil {
 		http.Error(w, "queue unavailable", http.StatusBadGateway)
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
+}
+
+func parseQueueRulesets(raw string) []contracts.GameRuleset {
+	if strings.TrimSpace(raw) == "" {
+		return []contracts.GameRuleset{contracts.RulesetMoving}
+	}
+	out := []contracts.GameRuleset{}
+	seen := map[contracts.GameRuleset]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		ruleset := contracts.NormalizeRuleset(contracts.GameRuleset(strings.TrimSpace(strings.ToLower(part))))
+		if seen[ruleset] {
+			continue
+		}
+		seen[ruleset] = true
+		out = append(out, ruleset)
+	}
+	if len(out) == 0 {
+		return []contracts.GameRuleset{contracts.RulesetMoving}
+	}
+	return out
 }
 
 func (q *matchCoordinator) matchEnded(matchID string) bool {

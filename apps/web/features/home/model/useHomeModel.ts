@@ -22,6 +22,7 @@ import {
   startLobby,
   streamLobby,
   transferLobbyOwner as requestTransferLobbyOwner,
+  updateLobbySettings as requestUpdateLobbySettings,
   type LobbySnapshot,
 } from "../../lobby/lib/lobby-client";
 import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
@@ -31,6 +32,7 @@ import { useLobbyData } from "./useLobbyData";
 import {
   fetchMatchSession,
   fetchResumableSession,
+  type MatchConfig,
 } from "../../matchmaking/lib/queue-client";
 
 type AuthResponseUser = {
@@ -133,7 +135,7 @@ export function useHomeModel(options?: {
     mutationFn: () => requestSession(config),
   });
   const guestSessionMutation = useMutation({
-    mutationFn: (nickname: string) => requestGuestSession(config, nickname),
+    mutationFn: () => requestGuestSession(config),
   });
   const completeOnboardingMutation = useMutation({
     mutationFn: ({
@@ -221,7 +223,7 @@ export function useHomeModel(options?: {
     return nextSession;
   }
 
-  async function ensurePlayableSession(rawNickname: string) {
+  async function ensurePlayableSession() {
     const currentSession = sessionController.getSessionSnapshot();
     if (currentSession) {
       return currentSession;
@@ -241,8 +243,8 @@ export function useHomeModel(options?: {
         sessionController.setAuthPending({ authLoading: false, authError: "" });
         return bootstrapped;
       }
-      const data = await guestSessionMutation.mutateAsync(rawNickname);
-      const name = data.suggestedNickname || rawNickname.trim() || "Guest";
+      const data = await guestSessionMutation.mutateAsync();
+      const name = data.suggestedNickname || "Guest";
       const nextSession: AuthSessionSnapshot = {
         userId: data.user?.id || "",
         accessToken: data.accessToken || "",
@@ -288,7 +290,7 @@ export function useHomeModel(options?: {
       refreshSession,
       getPlayableSession: ensurePlayableSession,
     });
-  }, [sessionController, auth.nicknameInput]);
+  }, [sessionController]);
 
   useEffect(() => {
     if (isMatchRoute) {
@@ -705,6 +707,12 @@ export function useHomeModel(options?: {
       });
       return false;
     }
+    if (current.isGuest) {
+      sessionController.setAuthPending({
+        nicknameError: "Guest nicknames cannot be changed.",
+      });
+      return false;
+    }
     sessionController.setAuthPending({
       nicknameSaving: true,
       nicknameError: "",
@@ -763,8 +771,7 @@ export function useHomeModel(options?: {
     }
   };
 
-  const devLogin = () =>
-    ensurePlayableSession(`Player ${Math.floor(Math.random() * 1000)}`);
+  const devLogin = () => ensurePlayableSession();
 
   const logout = () => {
     void requestLogout(config);
@@ -803,7 +810,7 @@ export function useHomeModel(options?: {
   const playableSessionForLobby = async () => {
     const session = await sessionController.getPlayableSession();
     if (!session) {
-      setLobbyError("Enter a nickname to continue.");
+      setLobbyError("Could not start a guest session.");
       return null;
     }
     return session;
@@ -941,6 +948,26 @@ export function useHomeModel(options?: {
     }
   };
 
+  const updatePrivateLobbySettings = async (matchConfig: MatchConfig) => {
+    if (!privateLobby?.id || !auth.accessToken) return;
+    setLobbyBusy(true);
+    setLobbyError("");
+    try {
+      setPrivateLobby(
+        await requestUpdateLobbySettings(
+          config,
+          privateLobby.id,
+          auth.accessToken,
+          matchConfig,
+        ),
+      );
+    } catch (error) {
+      setLobbyError(getErrorMessage(error, "Could not update lobby settings"));
+    } finally {
+      setLobbyBusy(false);
+    }
+  };
+
   const reportPlayer = async (
     reportedUserId: string,
     category = "cheating",
@@ -973,11 +1000,14 @@ export function useHomeModel(options?: {
       kickLobbyMember,
       transferLobbyOwner,
       startPrivateLobby,
+      updatePrivateLobbySettings,
       placeGuess: gameController.placeGuess,
       finalizeGuess: gameController.finalizeGuess,
       advanceRound: gameController.advanceRound,
       forfeitMatch: gameController.forfeitMatch,
       leaveGame: gameController.leaveGame,
+      sendChatMessage: matchController.sendChatMessage,
+      sendChatEmote: matchController.sendChatEmote,
       reportPlayer,
       devLogin,
       triggerGoogleSignIn,

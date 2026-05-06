@@ -15,15 +15,10 @@ export async function requestSession(config: RuntimeConfig) {
   return resp.json();
 }
 
-export async function requestGuestSession(
-  config: RuntimeConfig,
-  nickname: string,
-) {
+export async function requestGuestSession(config: RuntimeConfig) {
   const resp = await fetch(`${config.apiURL}/v1/auth/guest`, {
     method: "POST",
     credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ nickname }),
   });
   if (!resp.ok) {
     throw new Error(await readError(resp, "Guest login failed"));

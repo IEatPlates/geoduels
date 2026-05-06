@@ -91,7 +91,7 @@ describe('MatchController', () => {
 
     controller.joinQueue();
     await vi.waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
-    expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:8090/queue?accessToken=guest-access-token');
+    expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:8090/queue?accessToken=guest-access-token&rulesets=moving');
     MockWebSocket.instances[0]?.emitMessage({
       type: 'queue_status',
       payload: { status: 'queued', queuedAt: 1773355276730 }

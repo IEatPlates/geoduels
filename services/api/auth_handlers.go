@@ -13,21 +13,9 @@ import (
 )
 
 func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Nickname string `json:"nickname"`
-	}
-	if err := decodeJSONBody(r, &req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
 	if payload, nextRefreshToken, err := a.rotateSessionFromCookie(r); err == nil {
 		a.setRefreshCookie(w, r, nextRefreshToken)
 		_ = json.NewEncoder(w).Encode(payload)
-		return
-	}
-	displayName, err := guestDisplayName(req.Nickname)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
@@ -44,7 +32,7 @@ func (a *api) guestLogin(w http.ResponseWriter, r *http.Request) {
 		writeRateLimited(w, retryAfter)
 		return
 	}
-	identity, err := a.store.CreateGuestIdentity(displayName)
+	identity, err := a.store.CreateGuestIdentity()
 	if err != nil {
 		http.Error(w, "persist guest failed", http.StatusInternalServerError)
 		return
@@ -84,6 +72,10 @@ func (a *api) completeOnboarding(w http.ResponseWriter, r *http.Request) {
 			"alreadyOnboarded": true,
 			"user":             sessionUser(identity),
 		})
+		return
+	}
+	if identity.AccountType == "guest" {
+		http.Error(w, "guest nicknames cannot be changed", http.StatusForbidden)
 		return
 	}
 	var req struct {
@@ -128,6 +120,10 @@ func (a *api) updateNickname(w http.ResponseWriter, r *http.Request) {
 	}
 	if !identity.Onboarded {
 		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+		return
+	}
+	if identity.AccountType == "guest" {
+		http.Error(w, "guest nicknames cannot be changed", http.StatusForbidden)
 		return
 	}
 	var req struct {
@@ -196,13 +192,6 @@ func validatedNickname(raw string) (string, error) {
 		return "", err
 	}
 	return nick, nil
-}
-
-func guestDisplayName(raw string) (string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return "Guest", nil
-	}
-	return validatedNickname(raw)
 }
 
 func (a *api) authenticatedClaims(r *http.Request) (auth.AppClaims, error) {

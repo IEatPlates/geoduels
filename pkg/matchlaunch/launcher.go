@@ -94,6 +94,7 @@ func (l Launcher) ValidateAssignment(ctx context.Context, assigned coordinator.A
 
 func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFound) (coordinator.Assignment, error) {
 	found.Mode = sessionpolicy.NormalizeMode(found.Mode, found.MatchID)
+	found.Config = contracts.NormalizeMatchConfig(found.Config)
 	if assigned, ok, err := l.Coord.GetAssignmentByMatch(ctx, found.MatchID); err == nil && ok {
 		return assigned, nil
 	}
@@ -160,6 +161,7 @@ func (l Launcher) EnsureAssignment(ctx context.Context, found contracts.MatchFou
 	rec := coordinator.Assignment{
 		MatchID:               found.MatchID,
 		Mode:                  found.Mode,
+		Config:                found.Config,
 		NodeID:                target.NodeID,
 		NodeEpoch:             target.OwnerEpoch,
 		PublicRoute:           target.PublicRoute,
@@ -191,6 +193,7 @@ func (l Launcher) AssignedPayload(userID string, assigned coordinator.Assignment
 	return contracts.MatchAssignedPayload{
 		MatchID:               assigned.MatchID,
 		Mode:                  string(sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)),
+		Config:                contracts.NormalizeMatchConfig(assigned.Config),
 		Node:                  assigned.PublicRoute,
 		Ticket:                ticket,
 		WSPath:                "/ws/" + assigned.PublicRoute,

@@ -102,7 +102,10 @@ function createModel(overrides?: Partial<HomeModel['view']>): HomeModel {
         opponentGuessAlert: false,
         connectionIssue: '',
         modeName: 'Moving',
-        mapName: 'A Source World'
+        mapName: 'A Source World',
+        streetViewInteractive: true,
+        chatMessages: [],
+        selfUserId: 'self'
       },
       overlays: {
         onboardingOpen: true,
@@ -158,6 +161,8 @@ function createModel(overrides?: Partial<HomeModel['view']>): HomeModel {
       advanceRound: vi.fn(() => true),
       forfeitMatch: vi.fn(() => true),
       leaveGame: vi.fn(),
+      sendChatMessage: vi.fn(() => true),
+      sendChatEmote: vi.fn(() => true),
       reportPlayer: vi.fn(async () => { }),
       createInviteLobby: vi.fn(async () => { }),
       joinInviteLobby: vi.fn(async () => { }),
@@ -165,6 +170,7 @@ function createModel(overrides?: Partial<HomeModel['view']>): HomeModel {
       kickLobbyMember: vi.fn(async () => { }),
       transferLobbyOwner: vi.fn(async () => { }),
       startPrivateLobby: vi.fn(async () => { }),
+      updatePrivateLobbySettings: vi.fn(async () => { }),
       devLogin: vi.fn(async () => null),
       triggerGoogleSignIn: vi.fn(async () => { }),
       loadLeaderboard: vi.fn(),

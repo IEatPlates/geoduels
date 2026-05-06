@@ -132,24 +132,26 @@ const (
 )
 
 type ticket struct {
-	ID                string  `json:"id"`
-	UserID            string  `json:"userId"`
-	DisplayName       string  `json:"displayName"`
-	AvatarURL         string  `json:"avatarUrl,omitempty"`
-	MMR               int     `json:"mmr"`
-	RatingRD          float64 `json:"ratingRd,omitempty"`
-	RankedGamesPlayed int     `json:"rankedGamesPlayed,omitempty"`
-	IsGuest           bool    `json:"isGuest,omitempty"`
-	JoinedAtUnixMS    int64   `json:"joinedAtUnixMs"`
+	ID                string                `json:"id"`
+	UserID            string                `json:"userId"`
+	DisplayName       string                `json:"displayName"`
+	AvatarURL         string                `json:"avatarUrl,omitempty"`
+	MMR               int                   `json:"mmr"`
+	RatingRD          float64               `json:"ratingRd,omitempty"`
+	RankedGamesPlayed int                   `json:"rankedGamesPlayed,omitempty"`
+	IsGuest           bool                  `json:"isGuest,omitempty"`
+	Ruleset           contracts.GameRuleset `json:"ruleset,omitempty"`
+	JoinedAtUnixMS    int64                 `json:"joinedAtUnixMs"`
 }
 
 type Store interface {
-	Join(pool QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error)
-	Heartbeat(pool QueuePool, userID string) (string, error)
-	Leave(pool QueuePool, userID string) error
-	Poll(pool QueuePool, userID string) (*contracts.MatchFound, error)
-	IsQueued(pool QueuePool, userID string) (bool, error)
-	RunMatchmaking(pool QueuePool, limit int) (int, error)
+	Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error)
+	Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error)
+	Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error
+	LeaveAllRulesets(pool QueuePool, userID string) error
+	Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error)
+	IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error)
+	RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error)
 }
 
 func NewFromEnv() (Store, error) {
@@ -182,6 +184,7 @@ const (
 )
 
 var allQueuePools = []QueuePool{QueuePoolGuest, QueuePoolRegistered}
+var allQueueRulesets = []contracts.GameRuleset{contracts.RulesetMoving, contracts.RulesetNMPZ}
 
 func AllQueuePools() []QueuePool {
 	return append([]QueuePool(nil), allQueuePools...)
@@ -195,50 +198,82 @@ func PoolForGuest(isGuest bool) QueuePool {
 }
 
 func QueueMatchKeysForUsers(users []string) []string {
-	keys := make([]string, 0, len(users)*len(allQueuePools))
+	keys := make([]string, 0, len(users)*len(allQueuePools)*len(allQueueRulesets))
 	seen := map[string]struct{}{}
 	for _, userID := range users {
 		if userID == "" {
 			continue
 		}
 		for _, pool := range allQueuePools {
-			key := queueMatchKey(pool, userID)
-			if _, ok := seen[key]; ok {
-				continue
+			legacyKey := "queue:" + string(pool) + ":match:" + userID
+			if _, ok := seen[legacyKey]; !ok {
+				seen[legacyKey] = struct{}{}
+				keys = append(keys, legacyKey)
 			}
-			seen[key] = struct{}{}
-			keys = append(keys, key)
+			for _, ruleset := range allQueueRulesets {
+				key := queueMatchKey(pool, ruleset, userID)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				keys = append(keys, key)
+			}
 		}
 	}
 	return keys
 }
 
-func queueMembersKey(pool QueuePool) string {
-	return "queue:" + string(pool) + ":pool"
+func normalizedRulesets(in []contracts.GameRuleset) []contracts.GameRuleset {
+	if len(in) == 0 {
+		return []contracts.GameRuleset{contracts.RulesetMoving}
+	}
+	out := make([]contracts.GameRuleset, 0, len(in))
+	seen := map[contracts.GameRuleset]bool{}
+	for _, raw := range in {
+		ruleset := contracts.NormalizeRuleset(raw)
+		if seen[ruleset] {
+			continue
+		}
+		seen[ruleset] = true
+		out = append(out, ruleset)
+	}
+	if len(out) == 0 {
+		return []contracts.GameRuleset{contracts.RulesetMoving}
+	}
+	return out
 }
 
-func queueJoinedKey(pool QueuePool) string {
-	return "queue:" + string(pool) + ":joined"
+func queuePrefix(pool QueuePool, ruleset contracts.GameRuleset) string {
+	return "queue:" + string(pool) + ":" + string(contracts.NormalizeRuleset(ruleset))
 }
 
-func queueTicketKey(pool QueuePool, userID string) string {
-	return "queue:" + string(pool) + ":ticket:" + userID
+func queueMembersKey(pool QueuePool, ruleset contracts.GameRuleset) string {
+	return queuePrefix(pool, ruleset) + ":pool"
 }
 
-func queueTicketPrefix(pool QueuePool) string {
-	return "queue:" + string(pool) + ":ticket:"
+func queueJoinedKey(pool QueuePool, ruleset contracts.GameRuleset) string {
+	return queuePrefix(pool, ruleset) + ":joined"
 }
 
-func queueMatchKey(pool QueuePool, userID string) string {
-	return "queue:" + string(pool) + ":match:" + userID
+func queueTicketKey(pool QueuePool, ruleset contracts.GameRuleset, userID string) string {
+	return queuePrefix(pool, ruleset) + ":ticket:" + userID
 }
 
-func queueMatcherLockKey(pool QueuePool) string {
-	return "queue:" + string(pool) + ":matcher-lock"
+func queueTicketPrefix(pool QueuePool, ruleset contracts.GameRuleset) string {
+	return queuePrefix(pool, ruleset) + ":ticket:"
 }
 
-func (r *redisStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func queueMatchKey(pool QueuePool, ruleset contracts.GameRuleset, userID string) string {
+	return queuePrefix(pool, ruleset) + ":match:" + userID
+}
+
+func queueMatcherLockKey(pool QueuePool, ruleset contracts.GameRuleset) string {
+	return queuePrefix(pool, ruleset) + ":matcher-lock"
+}
+
+func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	ctx := context.Background()
+	ruleset = contracts.NormalizeRuleset(ruleset)
 	name := req.DisplayName
 	if name == "" {
 		name = req.UserID
@@ -252,6 +287,7 @@ func (r *redisStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (contr
 		RatingRD:          req.RatingRD,
 		RankedGamesPlayed: req.RankedGamesPlayed,
 		IsGuest:           req.IsGuest,
+		Ruleset:           ruleset,
 		JoinedAtUnixMS:    time.Now().UnixMilli(),
 	}
 	tb, _ := json.Marshal(t)
@@ -260,13 +296,15 @@ func (r *redisStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (contr
 			if other == pool {
 				continue
 			}
-			pipe.ZRem(ctx, queueMembersKey(other), req.UserID)
-			pipe.Del(ctx, queueTicketKey(other, req.UserID), queueMatchKey(other, req.UserID))
-			pipe.ZRem(ctx, queueJoinedKey(other), req.UserID)
+			for _, otherRuleset := range allQueueRulesets {
+				pipe.ZRem(ctx, queueMembersKey(other, otherRuleset), req.UserID)
+				pipe.Del(ctx, queueTicketKey(other, otherRuleset, req.UserID), queueMatchKey(other, otherRuleset, req.UserID))
+				pipe.ZRem(ctx, queueJoinedKey(other, otherRuleset), req.UserID)
+			}
 		}
-		pipe.Set(ctx, queueTicketKey(pool, req.UserID), tb, queueTicketTTL)
-		pipe.ZAdd(ctx, queueMembersKey(pool), redis.Z{Score: float64(req.MMR), Member: req.UserID})
-		pipe.ZAdd(ctx, queueJoinedKey(pool), redis.Z{Score: float64(t.JoinedAtUnixMS), Member: req.UserID})
+		pipe.Set(ctx, queueTicketKey(pool, ruleset, req.UserID), tb, queueTicketTTL)
+		pipe.ZAdd(ctx, queueMembersKey(pool, ruleset), redis.Z{Score: float64(req.MMR), Member: req.UserID})
+		pipe.ZAdd(ctx, queueJoinedKey(pool, ruleset), redis.Z{Score: float64(t.JoinedAtUnixMS), Member: req.UserID})
 		return nil
 	})
 	if err != nil {
@@ -275,65 +313,85 @@ func (r *redisStore) Join(pool QueuePool, req contracts.QueueJoinRequest) (contr
 	return contracts.QueueJoinResponse{TicketID: t.ID, Status: "queued"}, nil, nil
 }
 
-func (r *redisStore) Heartbeat(pool QueuePool, userID string) (string, error) {
+func (r *redisStore) Heartbeat(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	ctx := context.Background()
-	raw, err := queueHeartbeatScript.Run(
-		ctx,
-		r.rdb,
-		[]string{queueMembersKey(pool), queueTicketKey(pool, userID), queueMatchKey(pool, userID), queueJoinedKey(pool)},
-		userID,
-		intStr(queueTicketTTL.Milliseconds()),
-	).Result()
-	if err != nil {
-		return QueuePresenceMissing, err
+	anyQueueing := false
+	for _, ruleset := range normalizedRulesets(rulesets) {
+		raw, err := queueHeartbeatScript.Run(
+			ctx,
+			r.rdb,
+			[]string{queueMembersKey(pool, ruleset), queueTicketKey(pool, ruleset, userID), queueMatchKey(pool, ruleset, userID), queueJoinedKey(pool, ruleset)},
+			userID,
+			intStr(queueTicketTTL.Milliseconds()),
+		).Result()
+		if err != nil {
+			return QueuePresenceMissing, err
+		}
+		status, _ := raw.(string)
+		if status == QueuePresenceMatched {
+			return QueuePresenceMatched, nil
+		}
+		if status == QueuePresenceQueueing {
+			anyQueueing = true
+		}
 	}
-	status, _ := raw.(string)
-	if status == "" {
-		return QueuePresenceMissing, nil
+	if anyQueueing {
+		return QueuePresenceQueueing, nil
 	}
-	return status, nil
+	return QueuePresenceMissing, nil
 }
 
-func (r *redisStore) Leave(pool QueuePool, userID string) error {
+func (r *redisStore) Leave(pool QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	ctx := context.Background()
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.ZRem(ctx, queueMembersKey(pool), userID)
-		pipe.ZRem(ctx, queueJoinedKey(pool), userID)
-		pipe.Del(ctx, queueTicketKey(pool, userID), queueMatchKey(pool, userID))
+		for _, ruleset := range normalizedRulesets(rulesets) {
+			pipe.ZRem(ctx, queueMembersKey(pool, ruleset), userID)
+			pipe.ZRem(ctx, queueJoinedKey(pool, ruleset), userID)
+			pipe.Del(ctx, queueTicketKey(pool, ruleset, userID), queueMatchKey(pool, ruleset, userID))
+		}
 		return nil
 	})
 	return err
 }
 
-func (r *redisStore) Poll(pool QueuePool, userID string) (*contracts.MatchFound, error) {
-	ctx := context.Background()
-	b, err := r.rdb.GetDel(ctx, queueMatchKey(pool, userID)).Bytes()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var m contracts.MatchFound
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+func (r *redisStore) LeaveAllRulesets(pool QueuePool, userID string) error {
+	return r.Leave(pool, allQueueRulesets, userID)
 }
 
-func (r *redisStore) RunMatchmaking(pool QueuePool, limit int) (int, error) {
+func (r *redisStore) Poll(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
+	ctx := context.Background()
+	for _, ruleset := range normalizedRulesets(rulesets) {
+		b, err := r.rdb.GetDel(ctx, queueMatchKey(pool, ruleset, userID)).Bytes()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				continue
+			}
+			return nil, err
+		}
+		var m contracts.MatchFound
+		if err := json.Unmarshal(b, &m); err != nil {
+			return nil, err
+		}
+		m.Config = contracts.NormalizeMatchConfig(m.Config)
+		return &m, nil
+	}
+	return nil, nil
+}
+
+func (r *redisStore) RunMatchmaking(pool QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	ruleset = contracts.NormalizeRuleset(ruleset)
 	ctx := context.Background()
 	owner := ticketID("matcher")
-	locked, err := r.rdb.SetNX(ctx, queueMatcherLockKey(pool), owner, matcherLockTTL).Result()
+	locked, err := r.rdb.SetNX(ctx, queueMatcherLockKey(pool, ruleset), owner, matcherLockTTL).Result()
 	if err != nil || !locked {
 		return 0, err
 	}
-	defer releaseMatcherLockScript.Run(ctx, r.rdb, []string{queueMatcherLockKey(pool)}, owner)
+	defer releaseMatcherLockScript.Run(ctx, r.rdb, []string{queueMatcherLockKey(pool, ruleset)}, owner)
 
-	users, err := r.rdb.ZRangeByScore(ctx, queueJoinedKey(pool), &redis.ZRangeBy{
+	users, err := r.rdb.ZRangeByScore(ctx, queueJoinedKey(pool, ruleset), &redis.ZRangeBy{
 		Min: "-inf",
 		Max: intStr(time.Now().UnixMilli() - mutualMatchWaitMS),
 	}).Result()
@@ -345,7 +403,7 @@ func (r *redisStore) RunMatchmaking(pool QueuePool, limit int) (int, error) {
 		if matched >= limit {
 			break
 		}
-		ok, err := r.tryMatch(ctx, pool, userID)
+		ok, err := r.tryMatch(ctx, pool, ruleset, userID)
 		if err != nil {
 			return matched, err
 		}
@@ -356,14 +414,14 @@ func (r *redisStore) RunMatchmaking(pool QueuePool, limit int) (int, error) {
 	return matched, nil
 }
 
-func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, userID string) (bool, error) {
-	selfRaw, err := r.rdb.Get(ctx, queueTicketKey(pool, userID)).Bytes()
+func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, ruleset contracts.GameRuleset, userID string) (bool, error) {
+	selfRaw, err := r.rdb.Get(ctx, queueTicketKey(pool, ruleset, userID)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, ruleset), userID).Result(); remErr != nil {
 				return false, remErr
 			}
-			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool), userID).Result(); remErr != nil {
+			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
 				return false, remErr
 			}
 			return false, nil
@@ -377,7 +435,7 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, userID string
 	rawOpp, err := atomicMatchScript.Run(
 		ctx,
 		r.rdb,
-		[]string{queueMembersKey(pool), queueTicketPrefix(pool), queueJoinedKey(pool)},
+		[]string{queueMembersKey(pool, ruleset), queueTicketPrefix(pool, ruleset), queueJoinedKey(pool, ruleset)},
 		userID,
 		intStr(int64(selfTicket.MMR-maxMatchWindowMMR)),
 		intStr(int64(selfTicket.MMR+maxMatchWindowMMR)),
@@ -407,41 +465,55 @@ func (r *redisStore) tryMatch(ctx context.Context, pool QueuePool, userID string
 	match := matchFromTickets(oppTicket, selfTicket)
 	mb, _ := json.Marshal(match)
 	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, queueMatchKey(pool, userID), mb, 2*time.Minute)
-		pipe.Set(ctx, queueMatchKey(pool, oppTicket.UserID), mb, 2*time.Minute)
+		pipe.Set(ctx, queueMatchKey(pool, ruleset, userID), mb, 2*time.Minute)
+		pipe.Set(ctx, queueMatchKey(pool, ruleset, oppTicket.UserID), mb, 2*time.Minute)
+		for _, queuedRuleset := range allQueueRulesets {
+			for _, matchedUserID := range []string{userID, oppTicket.UserID} {
+				pipe.ZRem(ctx, queueMembersKey(pool, queuedRuleset), matchedUserID)
+				pipe.ZRem(ctx, queueJoinedKey(pool, queuedRuleset), matchedUserID)
+				pipe.Del(ctx, queueTicketKey(pool, queuedRuleset, matchedUserID))
+				if queuedRuleset != ruleset {
+					pipe.Del(ctx, queueMatchKey(pool, queuedRuleset, matchedUserID))
+				}
+			}
+		}
 		return nil
 	})
 	return err == nil, err
 }
 
-func (r *redisStore) IsQueued(pool QueuePool, userID string) (bool, error) {
+func (r *redisStore) IsQueued(pool QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
 	ctx := context.Background()
-	ok, err := r.rdb.Exists(ctx, queueTicketKey(pool, userID)).Result()
-	if err != nil {
-		return false, err
-	}
-	if ok == 0 {
-		if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool), userID).Result(); remErr != nil {
-			return false, remErr
+	queued := false
+	for _, ruleset := range normalizedRulesets(rulesets) {
+		ok, err := r.rdb.Exists(ctx, queueTicketKey(pool, ruleset, userID)).Result()
+		if err != nil {
+			return false, err
 		}
-		if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool), userID).Result(); remErr != nil {
-			return false, remErr
-		}
-		return false, nil
-	}
-	if _, err := r.rdb.ZScore(ctx, queueMembersKey(pool), userID).Result(); err != nil {
-		if errors.Is(err, redis.Nil) {
-			if delErr := r.rdb.Del(ctx, queueTicketKey(pool, userID)).Err(); delErr != nil {
-				return false, delErr
-			}
-			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool), userID).Result(); remErr != nil {
+		if ok == 0 {
+			if _, remErr := r.rdb.ZRem(ctx, queueMembersKey(pool, ruleset), userID).Result(); remErr != nil {
 				return false, remErr
 			}
-			return false, nil
+			if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
+				return false, remErr
+			}
+			continue
 		}
-		return false, err
+		if _, err := r.rdb.ZScore(ctx, queueMembersKey(pool, ruleset), userID).Result(); err != nil {
+			if errors.Is(err, redis.Nil) {
+				if delErr := r.rdb.Del(ctx, queueTicketKey(pool, ruleset, userID)).Err(); delErr != nil {
+					return false, delErr
+				}
+				if _, remErr := r.rdb.ZRem(ctx, queueJoinedKey(pool, ruleset), userID).Result(); remErr != nil {
+					return false, remErr
+				}
+				continue
+			}
+			return false, err
+		}
+		queued = true
 	}
-	return true, nil
+	return queued, nil
 }
 
 func ticketID(userID string) string {
@@ -449,8 +521,14 @@ func ticketID(userID string) string {
 }
 
 func matchFromTickets(opponent, self ticket) contracts.MatchFound {
+	ruleset := contracts.NormalizeRuleset(self.Ruleset)
 	return contracts.MatchFound{
 		MatchID: "m-" + intStr(time.Now().UnixMilli()),
+		Mode:    contracts.ModeDuel,
+		Config: contracts.NormalizeMatchConfig(contracts.MatchConfig{
+			Ruleset: ruleset,
+			MapKey:  contracts.MapKeyForRuleset(ruleset),
+		}),
 		Players: []string{opponent.UserID, self.UserID},
 		Profiles: map[string]contracts.PlayerProfile{
 			opponent.UserID: profileFromTicket(opponent),

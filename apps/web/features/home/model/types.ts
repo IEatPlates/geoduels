@@ -1,7 +1,10 @@
 import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
 import type { LobbySnapshot } from "../../lobby/lib/lobby-client";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
+import type { GameRuleset, MatchConfig } from "../../matchmaking/lib/queue-client";
 import type {
+  ChatEmote,
+  ChatMessage,
   RatingDeltaPreview,
   RoundResult,
   RoundResultOverlayProps,
@@ -107,6 +110,9 @@ export type HomeGameView = {
   connectionIssue: string;
   modeName: string;
   mapName: string;
+  streetViewInteractive: boolean;
+  chatMessages: ChatMessage[];
+  selfUserId: string;
 };
 
 export type HomeOverlaysView = {
@@ -154,7 +160,7 @@ export type HomeViewModel = {
 };
 
 export type HomeActions = {
-  joinQueue: () => void;
+  joinQueue: (rulesets?: GameRuleset[]) => void;
   startSingleplayer: () => Promise<string>;
   cancelQueue: () => void;
   createInviteLobby: () => Promise<void>;
@@ -163,11 +169,14 @@ export type HomeActions = {
   kickLobbyMember: (userId: string) => Promise<void>;
   transferLobbyOwner: (userId: string) => Promise<void>;
   startPrivateLobby: () => Promise<void>;
+  updatePrivateLobbySettings: (config: MatchConfig) => Promise<void>;
   placeGuess: (lat: number, lng: number) => void;
   finalizeGuess: () => void;
   advanceRound: () => boolean;
   forfeitMatch: () => boolean;
   leaveGame: () => void;
+  sendChatMessage: (body: string) => boolean;
+  sendChatEmote: (emote: ChatEmote) => boolean;
   reportPlayer: (
     reportedUserId: string,
     category?: string,

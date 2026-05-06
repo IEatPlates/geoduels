@@ -35,6 +35,7 @@ type Guess struct {
 
 type Match struct {
 	ID                 string
+	Config             contracts.MatchConfig
 	State              contracts.MatchState
 	Unranked           bool
 	Players            map[string]*contracts.PlayerState
@@ -73,6 +74,7 @@ func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[st
 
 type MatchOptions struct {
 	Unranked bool
+	Config   contracts.MatchConfig
 }
 
 func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, opts MatchOptions) (*Match, error) {
@@ -86,6 +88,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 	if err != nil {
 		return nil, err
 	}
+	cfg := contracts.NormalizeMatchConfig(opts.Config)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, ok := e.matches[matchID]; ok {
@@ -112,6 +115,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 	}
 	m := &Match{
 		ID:              matchID,
+		Config:          cfg,
 		State:           contracts.MatchLive,
 		Unranked:        opts.Unranked,
 		Players:         players,
@@ -124,6 +128,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		CreatedAt:       time.Now(),
 		LastActivity:    time.Now(),
 	}
+	e.startRoundTimer(m)
 	if !m.Unranked {
 		m.RatingPreview = ratingPreview(playerIDs, players)
 	}
@@ -184,7 +189,7 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 	m.EventSeq++
 	if g.Finalize {
 		pressureDeadline := now.Add(pressureDuration)
-		if m.RoundDeadline.IsZero() || pressureDeadline.Before(m.RoundDeadline) {
+		if m.Config.RoundTimerMode != contracts.RoundTimerFixed && (m.RoundDeadline.IsZero() || pressureDeadline.Before(m.RoundDeadline)) {
 			m.RoundDeadline = pressureDeadline
 		}
 	}
@@ -460,6 +465,7 @@ func (e *Engine) advanceRound(m *Match) {
 	m.RoundStartedAt = time.Now()
 	m.RoundDeadline = time.Time{}
 	m.RoundLiveAnnounced = false
+	e.startRoundTimer(m)
 	for _, p := range m.Players {
 		p.Finalized = false
 		p.LastGuessLat = 0
@@ -470,6 +476,14 @@ func (e *Engine) advanceRound(m *Match) {
 	m.IntermissionUntil = time.Time{}
 	m.LastActivity = time.Now()
 	m.EventSeq++
+}
+
+func (e *Engine) startRoundTimer(m *Match) {
+	m.Config = contracts.NormalizeMatchConfig(m.Config)
+	if m.Config.RoundTimerMode != contracts.RoundTimerFixed {
+		return
+	}
+	m.RoundDeadline = m.RoundStartedAt.Add(roundIntro).Add(time.Duration(m.Config.RoundTimeLimitMS) * time.Millisecond)
 }
 
 func (m *Match) snapshot() *contracts.MatchSnapshot {
@@ -530,6 +544,7 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 	return &contracts.MatchSnapshot{
 		MatchID:         m.ID,
 		Mode:            contracts.ModeDuel,
+		Config:          contracts.NormalizeMatchConfig(m.Config),
 		Unranked:        m.Unranked,
 		State:           m.State,
 		Phase:           phase,

@@ -43,6 +43,75 @@ const (
 	ModeSingleplayer MatchMode = "singleplayer"
 )
 
+type GameRuleset string
+
+const (
+	RulesetMoving GameRuleset = "moving"
+	RulesetNMPZ   GameRuleset = "nmpz"
+)
+
+type RoundTimerMode string
+
+const (
+	RoundTimerPressure RoundTimerMode = "pressure"
+	RoundTimerFixed    RoundTimerMode = "fixed"
+)
+
+const (
+	MapKeyMoving            = "a-source-world"
+	MapKeyNMPZ              = "a-location-world"
+	DefaultFixedRoundTimeMS = int64(45_000)
+	MinimumFixedRoundTimeMS = int64(10_000)
+	MaximumFixedRoundTimeMS = int64(120_000)
+)
+
+type MatchConfig struct {
+	Ruleset          GameRuleset    `json:"ruleset,omitempty"`
+	MapKey           string         `json:"mapKey,omitempty"`
+	RoundTimerMode   RoundTimerMode `json:"roundTimerMode,omitempty"`
+	RoundTimeLimitMS int64          `json:"roundTimeLimitMs,omitempty"`
+}
+
+func NormalizeRuleset(v GameRuleset) GameRuleset {
+	switch v {
+	case RulesetNMPZ:
+		return RulesetNMPZ
+	default:
+		return RulesetMoving
+	}
+}
+
+func MapKeyForRuleset(ruleset GameRuleset) string {
+	if NormalizeRuleset(ruleset) == RulesetNMPZ {
+		return MapKeyNMPZ
+	}
+	return MapKeyMoving
+}
+
+func NormalizeMatchConfig(cfg MatchConfig) MatchConfig {
+	cfg.Ruleset = NormalizeRuleset(cfg.Ruleset)
+	if cfg.MapKey == "" {
+		cfg.MapKey = MapKeyForRuleset(cfg.Ruleset)
+	}
+	switch cfg.RoundTimerMode {
+	case RoundTimerFixed:
+		cfg.RoundTimerMode = RoundTimerFixed
+		if cfg.RoundTimeLimitMS <= 0 {
+			cfg.RoundTimeLimitMS = DefaultFixedRoundTimeMS
+		}
+		if cfg.RoundTimeLimitMS < MinimumFixedRoundTimeMS {
+			cfg.RoundTimeLimitMS = MinimumFixedRoundTimeMS
+		}
+		if cfg.RoundTimeLimitMS > MaximumFixedRoundTimeMS {
+			cfg.RoundTimeLimitMS = MaximumFixedRoundTimeMS
+		}
+	default:
+		cfg.RoundTimerMode = RoundTimerPressure
+		cfg.RoundTimeLimitMS = 0
+	}
+	return cfg
+}
+
 type MatchState string
 
 const (
@@ -125,6 +194,7 @@ type RoundResult struct {
 type MatchSnapshot struct {
 	MatchID         string                        `json:"matchId"`
 	Mode            MatchMode                     `json:"mode"`
+	Config          MatchConfig                   `json:"config,omitempty"`
 	Unranked        bool                          `json:"unranked,omitempty"`
 	State           MatchState                    `json:"state"`
 	Phase           MatchPhase                    `json:"phase"`
@@ -171,6 +241,7 @@ type ClientSelfState struct {
 type ClientMatchSnapshot struct {
 	MatchID         string                        `json:"matchId"`
 	Mode            MatchMode                     `json:"mode"`
+	Config          MatchConfig                   `json:"config,omitempty"`
 	Unranked        bool                          `json:"unranked,omitempty"`
 	State           MatchState                    `json:"state"`
 	Phase           MatchPhase                    `json:"phase"`
@@ -196,6 +267,7 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 	client := &ClientMatchSnapshot{
 		MatchID:         snap.MatchID,
 		Mode:            snap.Mode,
+		Config:          NormalizeMatchConfig(snap.Config),
 		Unranked:        snap.Unranked,
 		State:           snap.State,
 		Phase:           snap.Phase,
@@ -267,13 +339,14 @@ type QueueStatusEvent struct {
 }
 
 type MatchAssignedPayload struct {
-	MatchID               string `json:"matchId"`
-	Mode                  string `json:"mode,omitempty"`
-	Node                  string `json:"node"`
-	Ticket                string `json:"ticket"`
-	WSPath                string `json:"wsPath"`
-	SourceLobbyID         string `json:"sourceLobbyId,omitempty"`
-	SourceLobbyInviteCode string `json:"sourceLobbyInviteCode,omitempty"`
+	MatchID               string      `json:"matchId"`
+	Mode                  string      `json:"mode,omitempty"`
+	Config                MatchConfig `json:"config,omitempty"`
+	Node                  string      `json:"node"`
+	Ticket                string      `json:"ticket"`
+	WSPath                string      `json:"wsPath"`
+	SourceLobbyID         string      `json:"sourceLobbyId,omitempty"`
+	SourceLobbyInviteCode string      `json:"sourceLobbyInviteCode,omitempty"`
 }
 
 type SessionStartRequest struct {
@@ -284,6 +357,7 @@ type MatchSessionResponse struct {
 	Status                string                `json:"status"`
 	MatchID               string                `json:"matchId"`
 	Mode                  string                `json:"mode,omitempty"`
+	Config                MatchConfig           `json:"config,omitempty"`
 	Node                  string                `json:"node,omitempty"`
 	Ticket                string                `json:"ticket,omitempty"`
 	WSPath                string                `json:"wsPath,omitempty"`
@@ -367,6 +441,7 @@ type LobbySnapshot struct {
 	State          LobbyState    `json:"state"`
 	Mode           MatchMode     `json:"mode"`
 	MapScope       string        `json:"mapScope"`
+	Config         MatchConfig   `json:"config,omitempty"`
 	ActiveMatchID  string        `json:"activeMatchId,omitempty"`
 	LastMatchID    string        `json:"lastMatchId,omitempty"`
 	StartedMatchID string        `json:"startedMatchId,omitempty"`
@@ -376,8 +451,9 @@ type LobbySnapshot struct {
 }
 
 type LobbyCreateRequest struct {
-	Mode     MatchMode `json:"mode,omitempty"`
-	MapScope string    `json:"mapScope,omitempty"`
+	Mode     MatchMode   `json:"mode,omitempty"`
+	MapScope string      `json:"mapScope,omitempty"`
+	Config   MatchConfig `json:"config,omitempty"`
 }
 
 type LobbyMemberRequest struct {
@@ -397,6 +473,7 @@ type GameplayTicketClaims struct {
 type MatchFound struct {
 	MatchID               string                   `json:"matchId"`
 	Mode                  MatchMode                `json:"mode,omitempty"`
+	Config                MatchConfig              `json:"config,omitempty"`
 	Unranked              bool                     `json:"unranked,omitempty"`
 	Players               []string                 `json:"players"`
 	Profiles              map[string]PlayerProfile `json:"profiles,omitempty"`
@@ -533,10 +610,38 @@ type EventEnvelope struct {
 	Payload  any    `json:"payload,omitempty"`
 }
 
+type ChatMessageKind string
+
+const (
+	ChatMessageText  ChatMessageKind = "text"
+	ChatMessageEmote ChatMessageKind = "emote"
+)
+
+type ChatEmote string
+
+const (
+	ChatEmoteSkull      ChatEmote = "skull"
+	ChatEmoteSob        ChatEmote = "sob"
+	ChatEmoteThinking   ChatEmote = "thinking"
+	ChatEmoteSunglasses ChatEmote = "sunglasses"
+)
+
+type MatchChatMessage struct {
+	ID                string          `json:"id"`
+	MatchID           string          `json:"matchId"`
+	SenderUserID      string          `json:"senderUserId"`
+	SenderDisplayName string          `json:"senderDisplayName"`
+	Kind              ChatMessageKind `json:"kind"`
+	Body              string          `json:"body,omitempty"`
+	Emote             ChatEmote       `json:"emote,omitempty"`
+	CreatedAt         time.Time       `json:"createdAt"`
+}
+
 const (
 	EventMatchSnapshot  = "match.snapshot"
 	EventMatchState     = "match.state"
 	EventLegacySnapshot = "match.lifecycle.v2.snapshot"
+	EventChatMessage    = "chat.message"
 )
 
 const (
@@ -547,4 +652,6 @@ const (
 	ErrMatchNotFound    = "ERR_MATCH_NOT_FOUND"
 	ErrCommandDuplicate = "ERR_COMMAND_DUPLICATE"
 	ErrResumeInvalid    = "ERR_RESUME_INVALID"
+	ErrRateLimited      = "ERR_RATE_LIMITED"
+	ErrInvalidChat      = "ERR_INVALID_CHAT"
 )
