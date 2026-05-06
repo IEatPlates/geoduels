@@ -17,7 +17,7 @@ func TestMemoryStoreDoesNotExpandImmediately(t *testing.T) {
 	highMMR := 2200
 	lowMMR := 1600
 
-	_, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: highMMR})
+	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: highMMR})
 	if err != nil {
 		t.Fatalf("first join failed: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestMemoryStoreDoesNotExpandImmediately(t *testing.T) {
 		t.Fatalf("expected first join to queue")
 	}
 
-	_, match, err = store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: lowMMR})
+	_, match, err = store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: lowMMR})
 	if err != nil {
 		t.Fatalf("second join failed: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestMemoryStoreDoesNotExpandImmediately(t *testing.T) {
 func TestMemoryStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) {
 	store := newMemory()
 
-	_, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600})
+	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600})
 	if err != nil {
 		t.Fatalf("first join failed: %v", err)
 	}
@@ -45,14 +45,14 @@ func TestMemoryStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) 
 		t.Fatalf("expected first join to queue")
 	}
 
-	joined, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600 + baseMatchWindowMMR})
+	joined, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600 + baseMatchWindowMMR})
 	if err != nil {
 		t.Fatalf("second join failed: %v", err)
 	}
 	if joined.Status != "queued" || match != nil {
 		t.Fatalf("expected second player to queue before matchmaking tick, status=%q match=%v", joined.Status, match)
 	}
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("matchmaking failed: %v", err)
 	} else if matched != 0 {
 		t.Fatalf("expected no match before mutual wait, got %d", matched)
@@ -60,12 +60,12 @@ func TestMemoryStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) 
 
 	ageMemoryQueue(store, QueuePoolRegistered, mutualMatchWaitMS+int64(10*time.Millisecond))
 
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("matchmaking after mutual wait failed: %v", err)
 	} else if matched != 1 {
 		t.Fatalf("expected one match after mutual wait, got %d", matched)
 	}
-	match, err = store.Poll(QueuePoolRegistered, "p1")
+	match, err = store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "p1")
 	if err != nil {
 		t.Fatalf("poll failed: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 	highMMR := 1000 + baseMatchWindowMMR + 1
 	lowMMR := 1000
 
-	_, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: highMMR})
+	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: highMMR})
 	if err != nil {
 		t.Fatalf("first join failed: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 		t.Fatalf("expected first join to queue")
 	}
 
-	_, match, err = store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: lowMMR})
+	_, match, err = store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: lowMMR})
 	if err != nil {
 		t.Fatalf("second join failed: %v", err)
 	}
@@ -100,12 +100,12 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 		mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS
 	}
 
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("matchmaking failed: %v", err)
 	} else if matched != 1 {
 		t.Fatalf("expected one match after the queue window expanded, got %d", matched)
 	}
-	match, err = store.Poll(QueuePoolRegistered, "high")
+	match, err = store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "high")
 	if err != nil {
 		t.Fatalf("poll failed: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 	store := newMemory()
 
-	_, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: 2501})
+	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: 2501})
 	if err != nil {
 		t.Fatalf("first join failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 		t.Fatalf("expected first join to queue")
 	}
 
-	_, match, err = store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: 1500})
+	_, match, err = store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "low", DisplayName: "low", MMR: 1500})
 	if err != nil {
 		t.Fatalf("second join failed: %v", err)
 	}
@@ -138,12 +138,12 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 		mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
 	}
 
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("matchmaking outside cap failed: %v", err)
 	} else if matched != 0 {
 		t.Fatalf("expected no matches outside cap, got %d", matched)
 	}
-	match, err = store.Poll(QueuePoolRegistered, "high")
+	match, err = store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "high")
 	if err != nil {
 		t.Fatalf("poll outside cap failed: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 		t.Fatalf("expected 1001 MMR gap to remain queued, match=%v", match)
 	}
 
-	_, match, err = store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "within", DisplayName: "within", MMR: 1501})
+	_, match, err = store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "within", DisplayName: "within", MMR: 1501})
 	if err != nil {
 		t.Fatalf("third join failed: %v", err)
 	}
@@ -164,12 +164,12 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 			mem.queues[QueuePoolRegistered][i].JoinedAtUnixMS -= mutualMatchWaitMS + matchExpandEveryMS*100
 		}
 	}
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("matchmaking inside cap failed: %v", err)
 	} else if matched != 1 {
 		t.Fatalf("expected one match inside cap, got %d", matched)
 	}
-	match, err = store.Poll(QueuePoolRegistered, "high")
+	match, err = store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "high")
 	if err != nil {
 		t.Fatalf("poll inside cap failed: %v", err)
 	}
@@ -185,13 +185,13 @@ func TestRedisStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) {
 
 	store := &redisStore{rdb: rdb}
 
-	if _, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600}); err != nil {
+	if _, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600}); err != nil {
 		t.Fatalf("first join failed: %v", err)
 	} else if match != nil {
 		t.Fatalf("expected first join to queue")
 	}
 
-	joined, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600})
+	joined, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600})
 	if err != nil {
 		t.Fatalf("second join failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRedisStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) {
 		t.Fatalf("expected redis store to queue until matchmaking tick, status=%q match=%v", joined.Status, match)
 	}
 
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("redis matchmaking failed: %v", err)
 	} else if matched != 0 {
 		t.Fatalf("expected redis store to wait before matching, got %d", matched)
@@ -207,17 +207,60 @@ func TestRedisStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) {
 
 	ageRedisQueue(t, rdb, QueuePoolRegistered, []string{"p1", "p2"}, mutualMatchWaitMS+int64(10*time.Millisecond))
 
-	if matched, err := store.RunMatchmaking(QueuePoolRegistered, 50); err != nil {
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
 		t.Fatalf("redis matchmaking after mutual wait failed: %v", err)
 	} else if matched != 1 {
 		t.Fatalf("expected redis store to create one match after mutual wait, got %d", matched)
 	}
-	match, err = store.Poll(QueuePoolRegistered, "p1")
+	match, err = store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "p1")
 	if err != nil {
 		t.Fatalf("poll failed: %v", err)
 	}
 	if match == nil {
 		t.Fatalf("expected redis store to match after mutual wait")
+	}
+}
+
+func TestRedisStoreKeepsRulesetQueuesSeparateAndClearsOtherSelections(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	store := &redisStore{rdb: rdb}
+	req := func(userID string) contracts.QueueJoinRequest {
+		return contracts.QueueJoinRequest{UserID: userID, DisplayName: userID, MMR: 1600}
+	}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, req("both")); err != nil {
+		t.Fatalf("join moving: %v", err)
+	}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetNMPZ, req("both")); err != nil {
+		t.Fatalf("join nmpz: %v", err)
+	}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetNMPZ, req("nmpz-only")); err != nil {
+		t.Fatalf("join nmpz-only: %v", err)
+	}
+	ageRedisQueueRuleset(t, rdb, QueuePoolRegistered, contracts.RulesetNMPZ, []string{"both", "nmpz-only"}, mutualMatchWaitMS+int64(10*time.Millisecond))
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
+		t.Fatalf("moving matchmaking failed: %v", err)
+	} else if matched != 0 {
+		t.Fatalf("expected no moving match, got %d", matched)
+	}
+	if matched, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetNMPZ, 50); err != nil {
+		t.Fatalf("nmpz matchmaking failed: %v", err)
+	} else if matched != 1 {
+		t.Fatalf("expected one nmpz match, got %d", matched)
+	}
+	match, err := store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetNMPZ}, "both")
+	if err != nil {
+		t.Fatalf("poll nmpz match: %v", err)
+	}
+	if match == nil || match.Config.Ruleset != contracts.RulesetNMPZ {
+		t.Fatalf("expected nmpz match, got %#v", match)
+	}
+	if queued, err := store.IsQueued(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "both"); err != nil {
+		t.Fatalf("moving queue check: %v", err)
+	} else if queued {
+		t.Fatal("expected matched user to be removed from moving queue")
 	}
 }
 
@@ -229,11 +272,15 @@ func ageMemoryQueue(store Store, pool QueuePool, ageMS int64) {
 }
 
 func ageRedisQueue(t *testing.T, rdb *redis.Client, pool QueuePool, userIDs []string, ageMS int64) {
+	ageRedisQueueRuleset(t, rdb, pool, contracts.RulesetMoving, userIDs, ageMS)
+}
+
+func ageRedisQueueRuleset(t *testing.T, rdb *redis.Client, pool QueuePool, ruleset contracts.GameRuleset, userIDs []string, ageMS int64) {
 	t.Helper()
 	ctx := context.Background()
 	joinedAt := time.Now().UnixMilli() - ageMS
 	for _, userID := range userIDs {
-		key := queueTicketKey(pool, userID)
+		key := queueTicketKey(pool, ruleset, userID)
 		raw, err := rdb.Get(ctx, key).Bytes()
 		if err != nil {
 			t.Fatalf("get queue ticket for %s: %v", userID, err)
@@ -250,7 +297,7 @@ func ageRedisQueue(t *testing.T, rdb *redis.Client, pool QueuePool, userIDs []st
 		if err := rdb.Set(ctx, key, nextRaw, queueTicketTTL).Err(); err != nil {
 			t.Fatalf("set queue ticket for %s: %v", userID, err)
 		}
-		if err := rdb.ZAdd(ctx, queueJoinedKey(pool), redis.Z{Score: float64(joinedAt), Member: userID}).Err(); err != nil {
+		if err := rdb.ZAdd(ctx, queueJoinedKey(pool, ruleset), redis.Z{Score: float64(joinedAt), Member: userID}).Err(); err != nil {
 			t.Fatalf("set queue joined score for %s: %v", userID, err)
 		}
 	}
@@ -259,11 +306,11 @@ func ageRedisQueue(t *testing.T, rdb *redis.Client, pool QueuePool, userIDs []st
 func TestMemoryStoreHeartbeatReflectsQueueState(t *testing.T) {
 	store := newMemory()
 
-	if _, _, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "solo", DisplayName: "solo", MMR: 1000}); err != nil {
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "solo", DisplayName: "solo", MMR: 1000}); err != nil {
 		t.Fatalf("join failed: %v", err)
 	}
 
-	status, err := store.Heartbeat(QueuePoolRegistered, "solo")
+	status, err := store.Heartbeat(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "solo")
 	if err != nil {
 		t.Fatalf("heartbeat failed: %v", err)
 	}
@@ -271,11 +318,11 @@ func TestMemoryStoreHeartbeatReflectsQueueState(t *testing.T) {
 		t.Fatalf("expected queueing heartbeat status, got %q", status)
 	}
 
-	if err := store.Leave(QueuePoolRegistered, "solo"); err != nil {
+	if err := store.Leave(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "solo"); err != nil {
 		t.Fatalf("leave failed: %v", err)
 	}
 
-	status, err = store.Heartbeat(QueuePoolRegistered, "solo")
+	status, err = store.Heartbeat(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "solo")
 	if err != nil {
 		t.Fatalf("heartbeat after leave failed: %v", err)
 	}
@@ -287,13 +334,13 @@ func TestMemoryStoreHeartbeatReflectsQueueState(t *testing.T) {
 func TestMemoryStoreKeepsGuestsAndRegisteredPlayersSeparate(t *testing.T) {
 	store := newMemory()
 
-	if _, match, err := store.Join(QueuePoolGuest, contracts.QueueJoinRequest{UserID: "guest", DisplayName: "guest", MMR: 1000, IsGuest: true}); err != nil {
+	if _, match, err := store.Join(QueuePoolGuest, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "guest", DisplayName: "guest", MMR: 1000, IsGuest: true}); err != nil {
 		t.Fatalf("guest join failed: %v", err)
 	} else if match != nil {
 		t.Fatalf("expected guest to queue")
 	}
 
-	if _, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "registered", DisplayName: "registered", MMR: 1000}); err != nil {
+	if _, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "registered", DisplayName: "registered", MMR: 1000}); err != nil {
 		t.Fatalf("registered join failed: %v", err)
 	} else if match != nil {
 		t.Fatalf("guest and registered player should not match across pools")
@@ -307,13 +354,13 @@ func TestRedisStoreKeepsGuestsAndRegisteredPlayersSeparate(t *testing.T) {
 
 	store := &redisStore{rdb: rdb}
 
-	if _, match, err := store.Join(QueuePoolGuest, contracts.QueueJoinRequest{UserID: "guest", DisplayName: "guest", MMR: 1000, IsGuest: true}); err != nil {
+	if _, match, err := store.Join(QueuePoolGuest, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "guest", DisplayName: "guest", MMR: 1000, IsGuest: true}); err != nil {
 		t.Fatalf("guest join failed: %v", err)
 	} else if match != nil {
 		t.Fatalf("expected guest to queue")
 	}
 
-	if _, match, err := store.Join(QueuePoolRegistered, contracts.QueueJoinRequest{UserID: "registered", DisplayName: "registered", MMR: 1000}); err != nil {
+	if _, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "registered", DisplayName: "registered", MMR: 1000}); err != nil {
 		t.Fatalf("registered join failed: %v", err)
 	} else if match != nil {
 		t.Fatalf("guest and registered player should not match across redis pools")
@@ -323,7 +370,7 @@ func TestRedisStoreKeepsGuestsAndRegisteredPlayersSeparate(t *testing.T) {
 func ageRedisTicket(t *testing.T, rdb *redis.Client, pool QueuePool, userID string, ageMS int64) {
 	t.Helper()
 	ctx := context.Background()
-	key := queueTicketKey(pool, userID)
+	key := queueTicketKey(pool, contracts.RulesetMoving, userID)
 	raw, err := rdb.Get(ctx, key).Bytes()
 	if err != nil {
 		t.Fatalf("get redis ticket %s: %v", userID, err)
@@ -340,7 +387,7 @@ func ageRedisTicket(t *testing.T, rdb *redis.Client, pool QueuePool, userID stri
 	if err := rdb.Set(ctx, key, aged, queueTicketTTL).Err(); err != nil {
 		t.Fatalf("set redis ticket %s: %v", userID, err)
 	}
-	if err := rdb.ZAdd(ctx, queueJoinedKey(pool), redis.Z{Score: float64(queued.JoinedAtUnixMS), Member: userID}).Err(); err != nil {
+	if err := rdb.ZAdd(ctx, queueJoinedKey(pool, contracts.RulesetMoving), redis.Z{Score: float64(queued.JoinedAtUnixMS), Member: userID}).Err(); err != nil {
 		t.Fatalf("age redis joined score %s: %v", userID, err)
 	}
 }

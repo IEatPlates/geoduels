@@ -93,10 +93,11 @@ function createMatchState(snapshot: Snapshot | null): MatchState {
 	    snapshot,
 	    activeMatchId: snapshot?.matchId || '',
 	    sourceLobbyId: '',
-	    sourceLobbyInviteCode: '',
-	    queueError: '',
+    sourceLobbyInviteCode: '',
+    queueError: '',
     connectionIssue: '',
-    onlinePlayers: 42
+    onlinePlayers: 42,
+    chatMessages: []
   };
 }
 

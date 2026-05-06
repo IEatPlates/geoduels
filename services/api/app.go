@@ -15,6 +15,7 @@ import (
 
 	"geoduels/pkg/auth"
 	"geoduels/pkg/coordinator"
+	"geoduels/pkg/lobbysettings"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/persistence"
 )
@@ -24,6 +25,7 @@ type api struct {
 	store                 persistence.Store
 	coord                 *coordinator.Store
 	redis                 *redis.Client
+	lobbySettings         *lobbysettings.Store
 	httpClient            *http.Client
 	googleVerifier        *auth.GoogleVerifier
 	googleClientID        string
@@ -99,6 +101,7 @@ func newAPI() (*api, error) {
 		store:                 store,
 		coord:                 coordinator.NewStore(rdb, getenvDuration("GAMEPLAY_NODE_TTL", 10*time.Second), 2*time.Hour, singleplayerTTL, 5*time.Second),
 		redis:                 rdb,
+		lobbySettings:         lobbysettings.New(rdb, defaultLobbyTTL),
 		httpClient:            &http.Client{Timeout: 3 * time.Second},
 		googleVerifier:        googleVerifier,
 		googleClientID:        googleClientID,
@@ -143,6 +146,7 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/lobbies/{id}/leave", a.leaveLobby).Methods(http.MethodPost)
 	r.HandleFunc("/v1/lobbies/{id}/kick", a.kickLobbyMember).Methods(http.MethodPost)
 	r.HandleFunc("/v1/lobbies/{id}/transfer-owner", a.transferLobbyOwner).Methods(http.MethodPost)
+	r.HandleFunc("/v1/lobbies/{id}/settings", a.updateLobbySettings).Methods(http.MethodPatch)
 
 	r.HandleFunc("/v1/leaderboard", a.leaderboard).Methods(http.MethodGet)
 	r.HandleFunc("/v1/matches/{id}", a.match).Methods(http.MethodGet)
@@ -159,6 +163,7 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/admin/players/{id}/report-mute", a.adminClearReporterMute).Methods(http.MethodDelete)
 	r.HandleFunc("/v1/admin/players/{id}/moderator", a.adminPromoteModerator).Methods(http.MethodPost)
 	r.HandleFunc("/v1/admin/players/{id}/moderator", a.adminDemoteModerator).Methods(http.MethodDelete)
+	r.HandleFunc("/v1/admin/matches/{id}/chat", a.adminMatchChat).Methods(http.MethodGet)
 	r.HandleFunc("/v1/admin/moderation/cases", a.adminModerationCases).Methods(http.MethodGet)
 	r.HandleFunc("/v1/admin/moderation/cases/{id}", a.adminModerationCase).Methods(http.MethodGet)
 	r.HandleFunc("/v1/admin/moderation/cases/{id}/actions", a.adminModerationCaseAction).Methods(http.MethodPost)
@@ -174,6 +179,7 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/admin/changelog", a.adminGetChangelog).Methods(http.MethodGet)
 	r.HandleFunc("/v1/admin/changelog", a.adminPutChangelog).Methods(http.MethodPut)
 	r.HandleFunc("/v1/admin/maps/current/upload", a.adminUploadCurrentMap).Methods(http.MethodPost)
+	r.HandleFunc("/v1/admin/maps/{mapKey}/upload", a.adminUploadMap).Methods(http.MethodPost)
 	r.Handle("/metrics", observability.Handler(a.metrics.Registry)).Methods(http.MethodGet)
 	return r
 }

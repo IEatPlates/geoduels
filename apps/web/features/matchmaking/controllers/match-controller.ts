@@ -1,4 +1,4 @@
-import type { Snapshot } from '../../../components/ui/types';
+import type { ChatEmote, ChatMessage, Snapshot } from '../../../components/ui/types';
 import type { SfxController } from '../../../lib/audio/sfx';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { ObservableStore } from '../../../lib/observable-store';
@@ -6,7 +6,7 @@ import { initialMatchmakingState, matchmakingReducer, type MatchmakingAction, ty
 import type { AuthSessionSnapshot } from '../../auth/session';
 import type { SessionController } from '../../auth/controllers/session-controller';
 import { GameplaySocketClient } from '../lib/gameplay-socket-client';
-import { fetchMatchSession, startSingleplayerSession, streamQueue } from '../lib/queue-client';
+import { fetchMatchSession, startSingleplayerSession, streamQueue, type GameRuleset } from '../lib/queue-client';
 
 type SendGameCommandOptions = {
   errorMessage?: string;
@@ -24,6 +24,7 @@ export type MatchState = {
   queueError: string;
   connectionIssue: string;
   onlinePlayers: number;
+  chatMessages: ChatMessage[];
 };
 
 const initialState: MatchState = {
@@ -35,7 +36,8 @@ const initialState: MatchState = {
   sourceLobbyInviteCode: '',
   queueError: '',
   connectionIssue: '',
-  onlinePlayers: 0
+  onlinePlayers: 0,
+  chatMessages: []
 };
 
 export class MatchController extends ObservableStore<MatchState> {
@@ -95,8 +97,17 @@ export class MatchController extends ObservableStore<MatchState> {
         this.noteServerActivity();
         this.patchState({
           activeMatchId: snapshot.matchId || this.state.activeMatchId,
-          snapshot
+          snapshot,
+          chatMessages: this.state.snapshot?.matchId === snapshot.matchId ? this.state.chatMessages : []
         });
+      },
+      onChatMessage: (message) => {
+        this.noteServerActivity();
+        if (message.matchId && this.state.activeMatchId && message.matchId !== this.state.activeMatchId) return;
+        this.patchState({
+          chatMessages: [...this.state.chatMessages.filter((item) => item.id !== message.id), message].slice(-60)
+        });
+        this.playChatSfx();
       },
       onAckError: (message) => {
         this.patchState({ queueError: message });
@@ -220,7 +231,8 @@ export class MatchController extends ObservableStore<MatchState> {
       sourceLobbyId: '',
       sourceLobbyInviteCode: '',
       queueError: '',
-      connectionIssue: ''
+      connectionIssue: '',
+      chatMessages: []
     });
   };
 
@@ -354,7 +366,7 @@ export class MatchController extends ObservableStore<MatchState> {
     return true;
   };
 
-  joinQueue = () => {
+  joinQueue = (rulesets: GameRuleset[] = ['moving']) => {
     this.recoverAbort?.abort();
     this.queueAbort?.abort();
     this.patchState({ queueError: '' });
@@ -370,7 +382,7 @@ export class MatchController extends ObservableStore<MatchState> {
           return;
         }
         this.dispatchMatchmaking({ type: 'join_requested', startedAt: Date.now() });
-        await streamQueue(this.config, session, controller.signal, (event) => {
+        await streamQueue(this.config, session, controller.signal, rulesets, (event) => {
           if (event.type === 'queue_status') {
             this.dispatchMatchmaking({ type: 'queue_status', status: event.status, queuedAt: event.queuedAt });
             return;
@@ -457,6 +469,20 @@ export class MatchController extends ObservableStore<MatchState> {
   private playMatchFoundSfx() {
     this.sfxController?.play('duel-game-start');
   }
+
+  private playChatSfx() {
+    this.sfxController?.play('chat');
+  }
+
+  sendChatMessage = (body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed) return false;
+    return this.sendGameCommand('chat.send', { body: trimmed }, { errorMessage: this.config.gameConnectionErrorMessage });
+  };
+
+  sendChatEmote = (emote: ChatEmote) => {
+    return this.sendGameCommand('chat.emote', { emote }, { errorMessage: this.config.gameConnectionErrorMessage });
+  };
 
   sendGameCommand = (type: string, payload: Record<string, unknown>, options?: SendGameCommandOptions) => {
     if (!this.socketClient.isOpen()) {

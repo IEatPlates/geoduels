@@ -22,6 +22,7 @@ type HomePageLobbyProps = {
     | "kickLobbyMember"
     | "transferLobbyOwner"
     | "startPrivateLobby"
+    | "updatePrivateLobbySettings"
     | "devLogin"
     | "triggerGoogleSignIn"
     | "loadLeaderboard"
@@ -72,6 +73,7 @@ export default function HomePageLobby({
       kickLobbyMember={actions.kickLobbyMember}
       transferLobbyOwner={actions.transferLobbyOwner}
       startPrivateLobby={actions.startPrivateLobby}
+      updatePrivateLobbySettings={actions.updatePrivateLobbySettings}
       queueError={lobby.queueError}
       onlinePlayers={lobby.onlinePlayers}
       maintenance={lobby.maintenance}

@@ -165,6 +165,12 @@ export function deriveHomeModel({
   const resultMode = uiPhase === "round_result" || uiPhase === "match_end";
   const selfPlayer = snapshot?.players?.[selfId];
   const oppPlayer = oppId ? snapshot?.players?.[oppId] : undefined;
+  const matchConfig = snapshot?.config || {};
+  const ruleset = matchConfig.ruleset === "nmpz" ? "nmpz" : "moving";
+  const roundTimeLimitMs =
+    matchConfig.roundTimerMode === "fixed" && typeof matchConfig.roundTimeLimitMs === "number"
+      ? matchConfig.roundTimeLimitMs
+      : config.roundDurationMs;
   const streetViewSrc = buildStreetViewSrc(snapshot, config.googleEmbedKey);
   const selfQueueName = getSelfQueueName({
     displayName: auth.displayName,
@@ -252,7 +258,7 @@ export function deriveHomeModel({
     isRoundTimerRunning && !isSingleplayer && snapshot?.phase === "live"
       ? Math.max(
           0,
-          Math.min(100, (game.roundMSLeft / config.roundDurationMs) * 100),
+          Math.min(100, (game.roundMSLeft / roundTimeLimitMs) * 100),
         )
       : 100;
   const matchOutcome: "win" | "lose" | "draw" =
@@ -416,8 +422,11 @@ export function deriveHomeModel({
       guessSubmitted: game.guessSubmitted,
       opponentGuessAlert: isSingleplayer ? false : game.opponentGuessAlert,
       connectionIssue: match.connectionIssue,
-      modeName: isSingleplayer ? "Practice" : "Moving",
-      mapName: "A Source World",
+      modeName: isSingleplayer ? "Practice" : ruleset === "nmpz" ? "NMPZ" : "Moving",
+      mapName: ruleset === "nmpz" ? "A Location World" : "A Source World",
+      streetViewInteractive: ruleset !== "nmpz",
+      chatMessages: match.chatMessages,
+      selfUserId: selfId,
     },
     overlays: {
       onboardingOpen: auth.onboardingRequired && !!auth.userId,

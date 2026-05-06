@@ -3,9 +3,17 @@ import { normalizeHTTPBase, normalizeWSBase } from '../../../lib/runtime-config'
 import type { Snapshot } from '../../../components/ui/types';
 import type { AuthSessionSnapshot } from '../../auth/session';
 
+export type GameRuleset = 'moving' | 'nmpz';
+export type MatchConfig = {
+  ruleset?: GameRuleset;
+  mapKey?: string;
+  roundTimerMode?: 'pressure' | 'fixed';
+  roundTimeLimitMs?: number;
+};
+
 export type QueueEvent =
   | { type: 'queue_status'; status: string; queuedAt?: number }
-  | { type: 'match_assigned'; matchId: string; mode?: string; node: string; ticket: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { type: 'match_assigned'; matchId: string; mode?: string; config?: MatchConfig; node: string; ticket: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
   | { type: 'queue_error'; message: string };
 
 export type MaintenancePhase = 'normal' | 'warning' | 'active';
@@ -85,10 +93,12 @@ export async function streamQueue(
   config: RuntimeConfig,
   session: AuthSessionSnapshot,
   signal: AbortSignal,
+  rulesets: GameRuleset[],
   onEvent: (event: QueueEvent) => void
 ) {
   const base = normalizeWSBase(config.queueURL).replace(/\/$/, '');
-  const target = `${base}/queue?accessToken=${encodeURIComponent(session.accessToken)}`;
+  const selectedRulesets = (rulesets.length ? rulesets : ['moving']).join(',');
+  const target = `${base}/queue?accessToken=${encodeURIComponent(session.accessToken)}&rulesets=${encodeURIComponent(selectedRulesets)}`;
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -160,6 +170,7 @@ export async function streamQueue(
             type: 'match_assigned',
             matchId: typeof payload?.matchId === 'string' ? payload.matchId : '',
             mode: typeof payload?.mode === 'string' ? payload.mode : '',
+            config: typeof payload?.config === 'object' && payload.config ? (payload.config as MatchConfig) : undefined,
             node: typeof payload?.node === 'string' ? payload.node : '',
             ticket: typeof payload?.ticket === 'string' ? payload.ticket : '',
             wsPath: typeof payload?.wsPath === 'string' ? payload.wsPath : '',
@@ -205,13 +216,13 @@ export async function fetchResumableSession(
 }
 
 export type MatchSessionResponse =
-  | { status: 'live_connectable'; matchId: string; mode?: string; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
   | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
   | {
       status: 'replaced';
       matchId: string;
       replacementMatchId: string;
-      replacement?: { matchId: string; mode?: string; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string };
+      replacement?: { matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string };
       sourceLobbyId?: string;
       sourceLobbyInviteCode?: string;
     }
@@ -244,6 +255,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
       status,
       matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId,
       mode: typeof data?.mode === 'string' ? data.mode : '',
+      config: typeof data?.config === 'object' && data.config ? (data.config as MatchConfig) : undefined,
       ticket: typeof data?.ticket === 'string' ? data.ticket : '',
       node: typeof data?.node === 'string' ? data.node : '',
       wsPath: typeof data?.wsPath === 'string' ? data.wsPath : '',
@@ -265,6 +277,7 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
         ? {
             matchId: typeof data.replacement.matchId === 'string' ? data.replacement.matchId : '',
             mode: typeof data.replacement.mode === 'string' ? data.replacement.mode : '',
+            config: typeof data.replacement.config === 'object' && data.replacement.config ? (data.replacement.config as MatchConfig) : undefined,
             ticket: typeof data.replacement.ticket === 'string' ? data.replacement.ticket : '',
             node: typeof data.replacement.node === 'string' ? data.replacement.node : '',
             wsPath: typeof data.replacement.wsPath === 'string' ? data.replacement.wsPath : '',

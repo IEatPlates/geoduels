@@ -1,5 +1,6 @@
 import React, { useState, useEffect, type ReactNode } from "react";
 import {
+  CheckCircle2,
   HelpCircle,
   Play,
   X,
@@ -21,7 +22,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import type { LeaderboardSummary } from "../../features/auth/controllers/session-controller";
 import type { LobbySnapshot } from "../../features/lobby/lib/lobby-client";
-import type { MaintenanceStatus } from "../../features/matchmaking/lib/queue-client";
+import type { GameRuleset, MaintenanceStatus, MatchConfig } from "../../features/matchmaking/lib/queue-client";
 import { getRuntimeConfig } from "../../lib/runtime-config";
 import AdSenseBanner from "./AdSenseBanner";
 
@@ -50,7 +51,7 @@ type Props = {
   leaderboardLoading: boolean;
   status: string;
   queueStartedAt: number | null;
-  joinQueue: () => void;
+  joinQueue: (rulesets?: GameRuleset[]) => void;
   startSingleplayer: () => void | Promise<string>;
   cancelQueue: () => void;
   privateLobby?: PrivateLobbyView;
@@ -60,6 +61,7 @@ type Props = {
   kickLobbyMember?: (userId: string) => Promise<void>;
   transferLobbyOwner?: (userId: string) => Promise<void>;
   startPrivateLobby?: () => Promise<void>;
+  updatePrivateLobbySettings?: (config: MatchConfig) => Promise<void>;
   queueError: string;
   onlinePlayers: number;
   maintenance: MaintenanceStatus | null;
@@ -401,6 +403,7 @@ export default function LobbyScreen({
   kickLobbyMember = async () => { },
   transferLobbyOwner = async () => { },
   startPrivateLobby = async () => { },
+  updatePrivateLobbySettings = async () => { },
   queueError,
   googleClientId,
   devLogin,
@@ -428,6 +431,7 @@ export default function LobbyScreen({
   const [isEditingProfileName, setIsEditingProfileName] = useState(false);
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [isBlogExpanded, setIsBlogExpanded] = useState(false);
+  const [queueRulesets, setQueueRulesets] = useState<GameRuleset[]>(["moving"]);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -457,7 +461,36 @@ export default function LobbyScreen({
     return () => window.clearInterval(timer);
   }, [maintenance, status]);
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("geoduels.queueRulesets");
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) {
+        const next = parsed.filter((item): item is GameRuleset => item === "moving" || item === "nmpz");
+        setQueueRulesets(Array.from(new Set(next)));
+      }
+    } catch {
+      setQueueRulesets(["moving"]);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("geoduels.queueRulesets", JSON.stringify(queueRulesets));
+    } catch {
+      // Ignore storage failures; defaults still work.
+    }
+  }, [queueRulesets]);
+
   const isQueueing = status === "queueing";
+  const toggleQueueRuleset = (ruleset: GameRuleset) => {
+    setQueueRulesets((current) => {
+      if (current.includes(ruleset)) {
+        return current.filter((item) => item !== ruleset);
+      }
+      return [...current, ruleset];
+    });
+  };
   const queueElapsedLabel = formatQueueElapsed(
     queueStartedAt ? nowMs - queueStartedAt : 0,
   );
@@ -465,19 +498,10 @@ export default function LobbyScreen({
   const showConnectionError =
     !connected && queueError.toLowerCase() === "connection error";
   const primaryButtonLabel = showConnectionError ? "Connection Error" : "Play";
-  const duelModeLabel = isQueueing
-    ? "Searching..."
-    : isRankedAccount
-      ? "Ranked"
-      : "Unranked";
   const userAvatarFallback = !userEmail
     ? "?"
     : (displayName || userEmail || "P").slice(0, 1).toUpperCase();
-  const duelHelperText = isQueueing
-    ? "Finding an opponent"
-    : isRankedAccount
-      ? "Moving allowed"
-      : "Log In to play Ranked";
+  const duelModeLabel = isQueueing ? "Searching..." : isRankedAccount ? "Ranked" : "Unranked";
   const showGoogleButton = !!googleClientId;
   const maintenanceStartMs = parseTime(maintenance?.startsAt);
   const maintenanceEndMs = parseTime(maintenance?.endsAt);
@@ -499,7 +523,8 @@ export default function LobbyScreen({
     nicknameSaving ||
     queuePaused ||
     playPaused ||
-    maintenanceIsActive;
+    maintenanceIsActive ||
+    queueRulesets.length === 0;
   const singleplayerDisabled =
     isQueueing ||
     authLoading ||
@@ -653,6 +678,21 @@ export default function LobbyScreen({
       : "";
   const privateLobbyActive = !!privateLobby.snapshot;
   const lobbyMembers = privateLobby.snapshot?.members || [];
+  const lobbyConfig = privateLobby.snapshot?.config || { ruleset: "moving", roundTimerMode: "pressure" };
+  const lobbyClockOn = lobbyConfig.roundTimerMode === "fixed";
+  const lobbyRoundSeconds = Math.round((lobbyConfig.roundTimeLimitMs || 45000) / 1000);
+  const saveLobbyConfig = (patch: MatchConfig) => {
+    const next: MatchConfig = {
+      ...lobbyConfig,
+      ...patch,
+    };
+    if (next.roundTimerMode !== "fixed") {
+      next.roundTimeLimitMs = undefined;
+    } else {
+      next.roundTimeLimitMs = Math.max(10000, Math.min(120000, next.roundTimeLimitMs || 45000));
+    }
+    void updatePrivateLobbySettings(next);
+  };
   const missingLobbyMembers = lobbyMembers.filter((member) => !member.connected);
   const canStartPrivateLobby =
     privateLobby.isOwner &&
@@ -724,29 +764,61 @@ export default function LobbyScreen({
               </div>
             ) : null}
 
+            {privateLobby.snapshot ? (
+              <div className="rounded-[16px] border border-white/10 bg-black/20 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b8b80]">
+                      Game Settings
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-white">
+                      {(lobbyConfig.ruleset === "nmpz" ? "NMPZ" : "Moving")} · {lobbyClockOn ? `${lobbyRoundSeconds}s clock` : "Clock off"}
+                    </p>
+                  </div>
+                  {privateLobby.isOwner && privateLobby.snapshot.state === "open" ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(["moving", "nmpz"] as const).map((ruleset) => (
+                        <button
+                          key={ruleset}
+                          type="button"
+                          onClick={() => saveLobbyConfig({ ruleset })}
+                          disabled={privateLobby.busy}
+                          className={`min-h-[38px] rounded-[10px] px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] transition disabled:opacity-50 ${lobbyConfig.ruleset === ruleset ? "bg-[#22d385] text-white" : "border border-white/10 bg-white/[0.08] text-white hover:bg-white/[0.12]"}`}
+                        >
+                          {ruleset === "nmpz" ? "NMPZ" : "Moving"}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => saveLobbyConfig({ roundTimerMode: lobbyClockOn ? "pressure" : "fixed", roundTimeLimitMs: lobbyClockOn ? undefined : lobbyRoundSeconds * 1000 })}
+                        disabled={privateLobby.busy}
+                        className={`min-h-[38px] rounded-[10px] px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] transition disabled:opacity-50 ${lobbyClockOn ? "bg-[#22d385] text-white" : "border border-white/10 bg-white/[0.08] text-white hover:bg-white/[0.12]"}`}
+                      >
+                        Clock
+                      </button>
+                      {lobbyClockOn ? (
+                        <input
+                          type="number"
+                          min={10}
+                          max={120}
+                          value={lobbyRoundSeconds}
+                          onChange={(event) => saveLobbyConfig({ roundTimerMode: "fixed", roundTimeLimitMs: Number(event.target.value) * 1000 })}
+                          disabled={privateLobby.busy}
+                          className="h-[38px] w-20 rounded-[10px] border border-white/10 bg-[#101a20]/80 px-2 text-sm font-bold text-white outline-none focus:border-[#2ad18f]/60 disabled:opacity-50"
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             {!privateLobby.isMember ? (
               <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
-                {!userId ? (
-                  <div className="mb-3 space-y-2">
-                    <input
-                      value={nicknameInput}
-                      onChange={(e) => onChangeNickname(e.target.value)}
-                      disabled={authLoading || nicknameSaving || privateLobby.busy}
-                      className="w-full rounded-[14px] border border-white/10 bg-[#101a20]/80 px-4 py-3 text-[15px] font-semibold text-white outline-none transition focus:border-[#2ad18f]/60"
-                      placeholder="Enter nickname"
-                      maxLength={14}
-                    />
-                    {authError ? (
-                      <p className="text-xs font-semibold text-red-300">
-                        {authError}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
                 <button
                   type="button"
                   onClick={() => void joinInviteLobby()}
-                  disabled={privateLobby.busy || authLoading || nicknameSaving}
+                  disabled={privateLobby.busy || authLoading}
                   className="inline-flex min-h-[46px] w-full items-center justify-center rounded-[14px] bg-[#22d385] px-5 text-[14px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(34,211,133,0.3)] transition hover:bg-[#2ae091] disabled:opacity-60"
                 >
                   {privateLobby.busy ? (
@@ -756,6 +828,11 @@ export default function LobbyScreen({
                   )}
                   Join Lobby
                 </button>
+                {authError ? (
+                  <p className="mt-3 text-center text-xs font-semibold text-red-300">
+                    {authError}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
@@ -1072,29 +1149,11 @@ export default function LobbyScreen({
   const renderInviteLobbyModal = () => {
     const normalizedInviteCode = inviteCodeInput.trim().toUpperCase();
     const inviteActionsDisabled =
-      privateLobby.busy || authLoading || nicknameSaving || maintenanceIsActive;
+      privateLobby.busy || authLoading || maintenanceIsActive;
 
     return (
       <LobbyModalShell title="Private Lobby" onClose={() => setOpenModal(null)}>
         <div className="space-y-4">
-          {!userId ? (
-            <div className="space-y-2">
-              <input
-                value={nicknameInput}
-                onChange={(e) => onChangeNickname(e.target.value)}
-                disabled={authLoading || nicknameSaving || privateLobby.busy}
-                className="w-full rounded-[14px] border border-white/10 bg-[#101a20]/80 px-4 py-3 text-[15px] font-semibold text-white outline-none transition focus:border-[#2ad18f]/60"
-                placeholder="Enter nickname"
-                maxLength={14}
-              />
-              {authError ? (
-                <p className="text-xs font-semibold text-red-300">
-                  {authError}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
           <button
             type="button"
             onClick={() => {
@@ -1113,6 +1172,11 @@ export default function LobbyScreen({
             )}
             Create Lobby
           </button>
+          {authError ? (
+            <p className="text-center text-xs font-semibold text-red-300">
+              {authError}
+            </p>
+          ) : null}
 
           <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
             <label
@@ -1187,7 +1251,7 @@ export default function LobbyScreen({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            {isEditingProfileName ? (
+            {isEditingProfileName && !isGuest ? (
               <input
                 value={nicknameInput}
                 onChange={(e) => onChangeNickname(e.target.value)}
@@ -1216,7 +1280,7 @@ export default function LobbyScreen({
                 {displayName || userEmail || "Guest"}
               </p>
             )}
-            {userId ? (
+            {userId && !isGuest ? (
               <button
                 type="button"
                 onClick={() => {
@@ -1494,7 +1558,7 @@ export default function LobbyScreen({
               className="flex w-full max-w-[1160px] flex-col items-center gap-5 pointer-events-auto lg:grid lg:grid-cols-[minmax(0,480px)_minmax(280px,360px)] lg:items-start lg:justify-center lg:gap-6"
             >
               <div className="flex w-full max-w-[480px] flex-col gap-5 lg:max-w-none">
-                <div className="glass-panel lobby-feature-card relative flex min-h-[240px] w-full flex-col justify-between rounded-[20px] p-5 transition-colors duration-500 sm:min-h-[260px] sm:p-8">
+                <div className="glass-panel lobby-feature-card relative flex w-full flex-col gap-4 rounded-[20px] p-5 transition-colors duration-500 sm:p-8">
                   <div
                     className={`absolute inset-0 pointer-events-none transition-opacity duration-500 ${isQueueing ? "opacity-95" : "opacity-80"} bg-[linear-gradient(180deg,rgba(72,128,106,0.28)_0%,rgba(22,42,34,0.78)_100%)]`}
                   />
@@ -1520,38 +1584,55 @@ export default function LobbyScreen({
                     <h2 className="mb-2 text-[36px] font-extrabold leading-tight tracking-tight text-white drop-shadow-md sm:text-[44px]">
                       Duel
                     </h2>
-                    <span className="text-[15px] font-medium text-white/90 drop-shadow-sm sm:text-[16px]">
-                      {duelHelperText}
-                    </span>
                   </div>
 
-                  <div className="relative z-10 mx-auto mt-5 flex h-full w-full flex-col justify-end px-0 pb-1 sm:mt-6 sm:px-2">
+                  <div className="relative z-10 mx-auto mt-1 flex w-full flex-col px-0 pb-1 sm:mt-2 sm:px-2">
                     {queueError && (
                       <p className="mb-3 text-center text-xs font-semibold text-red-300">
                         {queueError}
                       </p>
                     )}
-                    {!userId ? (
-                      <div className="mb-3 space-y-3">
-                        <input
-                          value={nicknameInput}
-                          onChange={(e) => onChangeNickname(e.target.value)}
-                          disabled={authLoading || nicknameSaving}
-                          className="w-full rounded-[14px] border border-white/10 bg-[#101a20]/80 px-4 py-3 text-[15px] font-semibold text-white outline-none transition focus:border-[#2ad18f]/60"
-                          placeholder="Enter nickname"
-                          maxLength={14}
-                        />
-                        {authError ? (
-                          <p className="text-center text-xs font-semibold text-red-300">
-                            {authError}
-                          </p>
-                        ) : null}
+                    {!userId && authError ? (
+                      <p className="mb-3 text-center text-xs font-semibold text-red-300">
+                        {authError}
+                      </p>
+                    ) : null}
+
+                    {!isQueueing ? (
+                      <div className="mb-3 overflow-hidden rounded-[14px] border border-white/10 bg-black/25">
+                        {([
+                          ["moving", "Moving"],
+                          ["nmpz", "NMPZ"],
+                        ] as const).map(([ruleset, label]) => (
+                          <button
+                            key={ruleset}
+                            type="button"
+                            aria-pressed={queueRulesets.includes(ruleset)}
+                            onClick={() => toggleQueueRuleset(ruleset)}
+                            className={`flex min-h-[44px] w-full items-center justify-between px-4 text-left text-[13px] font-extrabold uppercase tracking-[0.08em] transition ${
+                              queueRulesets.includes(ruleset)
+                                ? "bg-[#22d385]/12 text-[#d7ffec]"
+                                : "text-white/70 hover:bg-white/[0.07] hover:text-white"
+                            }`}
+                          >
+                            <span>{label}</span>
+                            <span className="flex h-[18px] w-[18px] items-center justify-center">
+                              {queueRulesets.includes(ruleset) ? (
+                                <CheckCircle2
+                                  size={18}
+                                  strokeWidth={2.5}
+                                  className="text-[#22d385]"
+                                />
+                              ) : null}
+                            </span>
+                          </button>
+                        ))}
                       </div>
                     ) : null}
 
                     {!isQueueing ? (
                       <button
-                        onClick={joinQueue}
+                        onClick={() => joinQueue(queueRulesets)}
                         disabled={duelDisabled}
                         className="w-full flex items-center justify-center rounded-[16px] bg-[#22d385] py-[14px] text-[16px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(34,211,133,0.3)] transition-all duration-200 hover:scale-[1.01] hover:bg-[#2ae091] hover:shadow-[0_6px_24px_rgba(34,211,133,0.4)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-[#22d385] disabled:hover:shadow-[0_4px_16px_rgba(34,211,133,0.3)]"
                       >

@@ -392,10 +392,11 @@ export async function requestAdminUploadCurrentMap(
   config: RuntimeConfig,
   accessToken: string,
   file: File,
+  mapKey = "a-source-world",
 ) {
   const body = new FormData();
   body.append("file", file);
-  const resp = await fetch(`${config.apiURL}/v1/admin/maps/current/upload`, {
+  const resp = await fetch(`${config.apiURL}/v1/admin/maps/${encodeURIComponent(mapKey)}/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` },
     body,

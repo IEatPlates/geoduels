@@ -36,6 +36,16 @@ func (a *api) createLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
 		return
 	}
+	if req.Config.Ruleset != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 {
+		cfg, err := a.lobbySettings.Save(r.Context(), snap.ID, req.Config)
+		if err != nil {
+			http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+			return
+		}
+		snap.Config = cfg
+	} else {
+		snap = a.lobbySettings.Apply(r.Context(), snap)
+	}
 	writeJSON(w, snap)
 }
 
@@ -50,7 +60,7 @@ func (a *api) getLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, snap)
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
 func (a *api) joinLobby(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +83,7 @@ func (a *api) joinLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	writeJSON(w, snap)
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
 func (a *api) leaveLobby(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +97,7 @@ func (a *api) leaveLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, snap)
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
 func (a *api) kickLobbyMember(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +116,7 @@ func (a *api) kickLobbyMember(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, snap)
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
 func (a *api) transferLobbyOwner(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +135,45 @@ func (a *api) transferLobbyOwner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (a *api) updateLobbySettings(w http.ResponseWriter, r *http.Request) {
+	userID, ok := a.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, found, err := a.store.GetLobbyByID(id)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "lobby not found", http.StatusNotFound)
+		return
+	}
+	if snap.OwnerUserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if snap.State != contracts.LobbyOpen {
+		http.Error(w, "lobby settings are locked", http.StatusConflict)
+		return
+	}
+	var req struct {
+		Config contracts.MatchConfig `json:"config"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	cfg, err := a.lobbySettings.Save(r.Context(), snap.ID, req.Config)
+	if err != nil {
+		http.Error(w, "lobby settings unavailable", http.StatusBadGateway)
+		return
+	}
+	snap.Config = cfg
 	writeJSON(w, snap)
 }
 

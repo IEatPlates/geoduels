@@ -24,6 +24,14 @@ type DBStore struct {
 }
 
 func NewDBStoreFromEnv() (*DBStore, error) {
+	mapKey := os.Getenv("LOCATION_MAP_KEY")
+	if mapKey == "" {
+		mapKey = contracts.MapKeyMoving
+	}
+	return NewDBStoreFromEnvForMapKey(mapKey)
+}
+
+func NewDBStoreFromEnvForMapKey(mapKey string) (*DBStore, error) {
 	url := os.Getenv("POSTGRES_URL")
 	if url == "" {
 		return nil, errors.New("POSTGRES_URL is required for location sampler")
@@ -39,9 +47,8 @@ func NewDBStoreFromEnv() (*DBStore, error) {
 		pool.Close()
 		return nil, err
 	}
-	mapKey := os.Getenv("LOCATION_MAP_KEY")
 	if mapKey == "" {
-		mapKey = "a-source-world"
+		mapKey = contracts.MapKeyMoving
 	}
 	return &DBStore{pool: pool, mapKey: mapKey}, nil
 }

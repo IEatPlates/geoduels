@@ -40,7 +40,7 @@ func (s *recoverTestStore) GoogleIdentityExists(googleSub string) (bool, error) 
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) CreateGuestIdentity(displayName string) (persistence.Identity, error) {
+func (s *recoverTestStore) CreateGuestIdentity() (persistence.Identity, error) {
 	panic("unexpected call")
 }
 
@@ -234,6 +234,14 @@ func (s *recoverTestStore) RecordRuntimeMatch(matchID, state string, ownerEpoch 
 	return nil
 }
 
+func (s *recoverTestStore) RecordMatchChatMessage(message persistence.MatchChatMessage) error {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) ListMatchChatMessages(matchID string, limit int) ([]persistence.MatchChatMessage, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error {
 	return nil
 }
@@ -334,53 +342,61 @@ func (s *recoverTestStore) Close() {}
 
 type recoverTestMatchStore struct{}
 
-func (s *recoverTestMatchStore) Join(pool matchstore.QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (s *recoverTestMatchStore) Join(pool matchstore.QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	panic("unexpected call")
 }
 
-func (s *recoverTestMatchStore) Heartbeat(pool matchstore.QueuePool, userID string) (string, error) {
+func (s *recoverTestMatchStore) Heartbeat(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	panic("unexpected call")
 }
 
-func (s *recoverTestMatchStore) Leave(pool matchstore.QueuePool, userID string) error {
+func (s *recoverTestMatchStore) Leave(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	panic("unexpected call")
 }
 
-func (s *recoverTestMatchStore) Poll(pool matchstore.QueuePool, userID string) (*contracts.MatchFound, error) {
+func (s *recoverTestMatchStore) LeaveAllRulesets(pool matchstore.QueuePool, userID string) error {
 	panic("unexpected call")
 }
 
-func (s *recoverTestMatchStore) IsQueued(pool matchstore.QueuePool, userID string) (bool, error) {
+func (s *recoverTestMatchStore) Poll(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestMatchStore) IsQueued(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
 	return false, nil
 }
 
-func (s *recoverTestMatchStore) RunMatchmaking(pool matchstore.QueuePool, limit int) (int, error) {
+func (s *recoverTestMatchStore) RunMatchmaking(pool matchstore.QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	return 0, nil
 }
 
 type queueTestMatchStore struct{}
 
-func (s *queueTestMatchStore) Join(pool matchstore.QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (s *queueTestMatchStore) Join(pool matchstore.QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	return contracts.QueueJoinResponse{TicketID: "t-1", Status: "queued"}, nil, nil
 }
 
-func (s *queueTestMatchStore) Heartbeat(pool matchstore.QueuePool, userID string) (string, error) {
+func (s *queueTestMatchStore) Heartbeat(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	panic("unexpected call")
 }
 
-func (s *queueTestMatchStore) Leave(pool matchstore.QueuePool, userID string) error {
+func (s *queueTestMatchStore) Leave(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	return nil
 }
 
-func (s *queueTestMatchStore) Poll(pool matchstore.QueuePool, userID string) (*contracts.MatchFound, error) {
+func (s *queueTestMatchStore) LeaveAllRulesets(pool matchstore.QueuePool, userID string) error {
+	return nil
+}
+
+func (s *queueTestMatchStore) Poll(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
 	return nil, context.Canceled
 }
 
-func (s *queueTestMatchStore) IsQueued(pool matchstore.QueuePool, userID string) (bool, error) {
+func (s *queueTestMatchStore) IsQueued(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
 	return false, nil
 }
 
-func (s *queueTestMatchStore) RunMatchmaking(pool matchstore.QueuePool, limit int) (int, error) {
+func (s *queueTestMatchStore) RunMatchmaking(pool matchstore.QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	return 0, nil
 }
 
@@ -390,19 +406,23 @@ type staleQueuePollStore struct {
 	polled bool
 }
 
-func (s *staleQueuePollStore) Join(pool matchstore.QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (s *staleQueuePollStore) Join(pool matchstore.QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	return contracts.QueueJoinResponse{TicketID: "t-1", Status: "queued"}, nil, nil
 }
 
-func (s *staleQueuePollStore) Heartbeat(pool matchstore.QueuePool, userID string) (string, error) {
+func (s *staleQueuePollStore) Heartbeat(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	panic("unexpected call")
 }
 
-func (s *staleQueuePollStore) Leave(pool matchstore.QueuePool, userID string) error {
+func (s *staleQueuePollStore) Leave(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	return nil
 }
 
-func (s *staleQueuePollStore) Poll(pool matchstore.QueuePool, userID string) (*contracts.MatchFound, error) {
+func (s *staleQueuePollStore) LeaveAllRulesets(pool matchstore.QueuePool, userID string) error {
+	return nil
+}
+
+func (s *staleQueuePollStore) Poll(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
 	if !s.polled {
 		s.polled = true
 		return s.match, nil
@@ -410,11 +430,11 @@ func (s *staleQueuePollStore) Poll(pool matchstore.QueuePool, userID string) (*c
 	return nil, nil
 }
 
-func (s *staleQueuePollStore) IsQueued(pool matchstore.QueuePool, userID string) (bool, error) {
+func (s *staleQueuePollStore) IsQueued(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
 	return false, nil
 }
 
-func (s *staleQueuePollStore) RunMatchmaking(pool matchstore.QueuePool, limit int) (int, error) {
+func (s *staleQueuePollStore) RunMatchmaking(pool matchstore.QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	return 0, nil
 }
 
@@ -422,27 +442,31 @@ type heartbeatTestStore struct {
 	status string
 }
 
-func (s *heartbeatTestStore) Join(pool matchstore.QueuePool, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
+func (s *heartbeatTestStore) Join(pool matchstore.QueuePool, ruleset contracts.GameRuleset, req contracts.QueueJoinRequest) (contracts.QueueJoinResponse, *contracts.MatchFound, error) {
 	panic("unexpected call")
 }
 
-func (s *heartbeatTestStore) Heartbeat(pool matchstore.QueuePool, userID string) (string, error) {
+func (s *heartbeatTestStore) Heartbeat(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (string, error) {
 	return s.status, nil
 }
 
-func (s *heartbeatTestStore) Leave(pool matchstore.QueuePool, userID string) error {
+func (s *heartbeatTestStore) Leave(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) error {
 	panic("unexpected call")
 }
 
-func (s *heartbeatTestStore) Poll(pool matchstore.QueuePool, userID string) (*contracts.MatchFound, error) {
+func (s *heartbeatTestStore) LeaveAllRulesets(pool matchstore.QueuePool, userID string) error {
 	panic("unexpected call")
 }
 
-func (s *heartbeatTestStore) IsQueued(pool matchstore.QueuePool, userID string) (bool, error) {
+func (s *heartbeatTestStore) Poll(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (*contracts.MatchFound, error) {
 	panic("unexpected call")
 }
 
-func (s *heartbeatTestStore) RunMatchmaking(pool matchstore.QueuePool, limit int) (int, error) {
+func (s *heartbeatTestStore) IsQueued(pool matchstore.QueuePool, rulesets []contracts.GameRuleset, userID string) (bool, error) {
+	panic("unexpected call")
+}
+
+func (s *heartbeatTestStore) RunMatchmaking(pool matchstore.QueuePool, ruleset contracts.GameRuleset, limit int) (int, error) {
 	return 0, nil
 }
 

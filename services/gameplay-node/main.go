@@ -36,6 +36,11 @@ const (
 	wsWriteWait  = 10 * time.Second
 	wsPongWait   = 70 * time.Second
 	wsPingPeriod = 25 * time.Second
+
+	chatMaxBodyLen       = 180
+	chatRateLimitBurst   = 5
+	chatRateLimitWindow  = 10 * time.Second
+	chatPersistQueueSize = 1024
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
@@ -64,6 +69,8 @@ type gameplayNode struct {
 	userMatch  map[string]string
 	matchUsers map[string][]string
 	matchModes map[string]contracts.MatchMode
+	chatRecent map[string][]time.Time
+	chatWrites chan contracts.MatchChatMessage
 
 	metrics *observability.RuntimeMetrics
 
@@ -88,9 +95,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sampler, samplerCleanup, err := locationsampler.NewFromEnv(ctx, locationsampler.Config{})
-	if err != nil {
-		log.Fatal(err)
+	samplers := map[string]*locationsampler.Sampler{}
+	samplerCleanups := []func(){}
+	for _, mapKey := range []string{contracts.MapKeyMoving, contracts.MapKeyNMPZ} {
+		sampler, cleanup, err := locationsampler.NewFromEnvForMapKey(ctx, mapKey, locationsampler.Config{})
+		if err != nil {
+			log.Fatal(err)
+		}
+		samplers[mapKey] = sampler
+		samplerCleanups = append(samplerCleanups, cleanup)
+	}
+	samplerCleanup := func() {
+		for _, cleanup := range samplerCleanups {
+			cleanup()
+		}
 	}
 	store, err := persistence.NewFromEnv()
 	if err != nil {
@@ -109,6 +127,16 @@ func main() {
 		log.Fatal("COORDINATOR_INTERNAL_SECRET is required")
 	}
 
+	duelConfigs := newMatchConfigRegistry()
+	roundForConfig := func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
+		cfg := duelConfigs.Get(matchID)
+		sampler := samplers[cfg.MapKey]
+		if sampler == nil {
+			sampler = samplers[contracts.MapKeyMoving]
+		}
+		return sampler.NextRound(context.Background(), matchID, roundIndex)
+	}
+
 	g := &gameplayNode{
 		nodeID:         nodeID,
 		nodeEpoch:      time.Now().UnixNano(),
@@ -122,11 +150,9 @@ func main() {
 		samplerCleanup: samplerCleanup,
 		redisCleanup:   redisCleanup,
 		runtimes: map[contracts.MatchMode]gameplayRuntime{
-			contracts.ModeDuel: duelRuntime{engine: duel.New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
-				return sampler.NextRound(context.Background(), matchID, roundIndex)
-			})},
+			contracts.ModeDuel: duelRuntime{engine: duel.New(roundForConfig), configs: duelConfigs},
 			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
-				return sampler.NextRound(context.Background(), matchID, roundIndex)
+				return samplers[contracts.MapKeyMoving].NextRound(context.Background(), matchID, roundIndex)
 			})},
 		},
 		conns:      map[string]*websocket.Conn{},
@@ -135,6 +161,8 @@ func main() {
 		userMatch:  map[string]string{},
 		matchUsers: map[string][]string{},
 		matchModes: map[string]contracts.MatchMode{},
+		chatRecent: map[string][]time.Time{},
+		chatWrites: make(chan contracts.MatchChatMessage, chatPersistQueueSize),
 		metrics:    observability.NewRuntimeMetrics(),
 		drainTTL:   getenvDuration("GAMEPLAY_DRAIN_TIMEOUT", 9*time.Minute+30*time.Second),
 	}
@@ -145,6 +173,7 @@ func main() {
 
 	go g.registerLoop()
 	go g.tick()
+	go g.chatPersistLoop()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", g.healthLive).Methods(http.MethodGet)
@@ -204,7 +233,8 @@ func (g *gameplayNode) createMatch(w http.ResponseWriter, req *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "exists"})
 		return
 	}
-	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked); err != nil && !strings.Contains(err.Error(), "already exists") {
+	found.Config = contracts.NormalizeMatchConfig(found.Config)
+	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked, found.Config); err != nil && !strings.Contains(err.Error(), "already exists") {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -442,6 +472,48 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 			return ack, nil
 		}
 		return ack, snap
+	case "chat.send":
+		message, err := g.buildChatMessage(matchID, userID, contracts.ChatMessageText, strPayload(cmd.Payload, "body"), "")
+		if err != nil {
+			status = "error"
+			errorCode = contracts.ErrInvalidChat
+			ack.Status = "error"
+			ack.ErrorCode = contracts.ErrInvalidChat
+			ack.Message = err.Error()
+			return ack, nil
+		}
+		if !g.allowChatSend(matchID, userID, time.Now()) {
+			status = "error"
+			errorCode = contracts.ErrRateLimited
+			ack.Status = "error"
+			ack.ErrorCode = contracts.ErrRateLimited
+			ack.Message = "chat is moving too fast"
+			return ack, nil
+		}
+		g.broadcastChatMessage(matchID, message)
+		g.enqueueChatPersist(message)
+		return ack, nil
+	case "chat.emote":
+		message, err := g.buildChatMessage(matchID, userID, contracts.ChatMessageEmote, "", strPayload(cmd.Payload, "emote"))
+		if err != nil {
+			status = "error"
+			errorCode = contracts.ErrInvalidChat
+			ack.Status = "error"
+			ack.ErrorCode = contracts.ErrInvalidChat
+			ack.Message = err.Error()
+			return ack, nil
+		}
+		if !g.allowChatSend(matchID, userID, time.Now()) {
+			status = "error"
+			errorCode = contracts.ErrRateLimited
+			ack.Status = "error"
+			ack.ErrorCode = contracts.ErrRateLimited
+			ack.Message = "chat is moving too fast"
+			return ack, nil
+		}
+		g.broadcastChatMessage(matchID, message)
+		g.enqueueChatPersist(message)
+		return ack, nil
 	case "session.leave_match":
 		return ack, nil
 	default:
@@ -451,6 +523,119 @@ func (g *gameplayNode) executeCommand(userID, matchID string, cmd contracts.Comm
 		ack.ErrorCode = contracts.ErrMatchNotFound
 		ack.Message = "unsupported command"
 		return ack, nil
+	}
+}
+
+func (g *gameplayNode) buildChatMessage(matchID, userID string, kind contracts.ChatMessageKind, body string, emote string) (contracts.MatchChatMessage, error) {
+	snap, ok := g.getSnapshot(matchID)
+	if !ok || snap == nil {
+		return contracts.MatchChatMessage{}, errors.New("match not found")
+	}
+	player, ok := snap.Players[userID]
+	if !ok {
+		return contracts.MatchChatMessage{}, errors.New("player not in match")
+	}
+	if snap.State != contracts.MatchLive && snap.State != contracts.MatchWaiting {
+		return contracts.MatchChatMessage{}, errors.New("chat is closed")
+	}
+	message := contracts.MatchChatMessage{
+		ID:                "chat-" + shortID(),
+		MatchID:           matchID,
+		SenderUserID:      userID,
+		SenderDisplayName: strings.TrimSpace(player.DisplayName),
+		Kind:              kind,
+		CreatedAt:         time.Now().UTC(),
+	}
+	if message.SenderDisplayName == "" {
+		message.SenderDisplayName = userID
+	}
+	switch kind {
+	case contracts.ChatMessageText:
+		message.Body = sanitizeChatBody(body)
+		if message.Body == "" {
+			return contracts.MatchChatMessage{}, errors.New("message is empty")
+		}
+	case contracts.ChatMessageEmote:
+		chatEmote := contracts.ChatEmote(strings.TrimSpace(emote))
+		if !validChatEmote(chatEmote) {
+			return contracts.MatchChatMessage{}, errors.New("unsupported emote")
+		}
+		message.Emote = chatEmote
+	default:
+		return contracts.MatchChatMessage{}, errors.New("unsupported chat kind")
+	}
+	return message, nil
+}
+
+func sanitizeChatBody(body string) string {
+	body = strings.TrimSpace(body)
+	body = strings.Join(strings.Fields(body), " ")
+	if len([]rune(body)) <= chatMaxBodyLen {
+		return body
+	}
+	runes := []rune(body)
+	return strings.TrimSpace(string(runes[:chatMaxBodyLen]))
+}
+
+func validChatEmote(emote contracts.ChatEmote) bool {
+	switch emote {
+	case contracts.ChatEmoteSkull, contracts.ChatEmoteSob, contracts.ChatEmoteThinking, contracts.ChatEmoteSunglasses:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *gameplayNode) allowChatSend(matchID, userID string, now time.Time) bool {
+	key := matchID + ":" + userID
+	cutoff := now.Add(-chatRateLimitWindow)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	recent := g.chatRecent[key]
+	kept := recent[:0]
+	for _, ts := range recent {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	if len(kept) >= chatRateLimitBurst {
+		g.chatRecent[key] = kept
+		return false
+	}
+	g.chatRecent[key] = append(kept, now)
+	return true
+}
+
+func (g *gameplayNode) broadcastChatMessage(matchID string, message contracts.MatchChatMessage) {
+	g.mu.RLock()
+	users := append([]string(nil), g.matchUsers[matchID]...)
+	g.mu.RUnlock()
+	for _, userID := range users {
+		evt := contracts.EventEnvelope{
+			Kind:     "event",
+			EventID:  "evt-" + shortID(),
+			Type:     contracts.EventChatMessage,
+			MatchID:  matchID,
+			ServerTS: time.Now().UnixMilli(),
+			Payload:  message,
+		}
+		_ = g.safeWriteMatch(userID, matchID, evt)
+	}
+}
+
+func (g *gameplayNode) enqueueChatPersist(message contracts.MatchChatMessage) {
+	select {
+	case g.chatWrites <- message:
+	default:
+		log.Printf("chat persist queue full, dropping chat log id=%s match=%s", message.ID, message.MatchID)
+	}
+}
+
+func (g *gameplayNode) chatPersistLoop() {
+	for message := range g.chatWrites {
+		if err := g.persist.RecordMatchChatMessage(message); err != nil {
+			log.Printf("record chat message failed id=%s match=%s: %v", message.ID, message.MatchID, err)
+		}
 	}
 }
 
@@ -498,6 +683,7 @@ func (g *gameplayNode) terminalize(matchID string, snap *contracts.MatchSnapshot
 		if g.userMatch[userID] == matchID {
 			delete(g.userMatch, userID)
 		}
+		delete(g.chatRecent, matchID+":"+userID)
 	}
 	g.mu.Unlock()
 

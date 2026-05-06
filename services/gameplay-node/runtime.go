@@ -2,15 +2,43 @@ package main
 
 import (
 	"errors"
+	"sync"
 
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/duel"
 	"geoduels/pkg/singleplayer"
 )
 
+type matchConfigRegistry struct {
+	mu      sync.RWMutex
+	configs map[string]contracts.MatchConfig
+}
+
+func newMatchConfigRegistry() *matchConfigRegistry {
+	return &matchConfigRegistry{configs: map[string]contracts.MatchConfig{}}
+}
+
+func (r *matchConfigRegistry) Set(matchID string, cfg contracts.MatchConfig) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configs[matchID] = contracts.NormalizeMatchConfig(cfg)
+}
+
+func (r *matchConfigRegistry) Get(matchID string) contracts.MatchConfig {
+	if r == nil {
+		return contracts.NormalizeMatchConfig(contracts.MatchConfig{})
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return contracts.NormalizeMatchConfig(r.configs[matchID])
+}
+
 type gameplayRuntime interface {
 	Mode() contracts.MatchMode
-	CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool) error
+	CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error
 	GetSnapshot(matchID string) (*contracts.MatchSnapshot, error)
 	SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error)
 	AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error)
@@ -21,13 +49,16 @@ type gameplayRuntime interface {
 }
 
 type duelRuntime struct {
-	engine *duel.Engine
+	engine  *duel.Engine
+	configs *matchConfigRegistry
 }
 
 func (r duelRuntime) Mode() contracts.MatchMode { return contracts.ModeDuel }
 
-func (r duelRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool) error {
-	_, err := r.engine.CreateMatchWithOptions(matchID, playerIDs, profiles, duel.MatchOptions{Unranked: unranked})
+func (r duelRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error {
+	config = contracts.NormalizeMatchConfig(config)
+	r.configs.Set(matchID, config)
+	_, err := r.engine.CreateMatchWithOptions(matchID, playerIDs, profiles, duel.MatchOptions{Unranked: unranked, Config: config})
 	return err
 }
 
@@ -65,7 +96,7 @@ type singleplayerRuntime struct {
 
 func (r singleplayerRuntime) Mode() contracts.MatchMode { return contracts.ModeSingleplayer }
 
-func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool) error {
+func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error {
 	_, err := r.engine.CreateMatch(matchID, playerIDs, profiles)
 	return err
 }

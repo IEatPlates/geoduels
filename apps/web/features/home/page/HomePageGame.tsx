@@ -17,6 +17,8 @@ type HomePageGameProps = {
     | "advanceRound"
     | "forfeitMatch"
     | "leaveGame"
+    | "sendChatMessage"
+    | "sendChatEmote"
   >;
 };
 
@@ -45,6 +47,7 @@ export default function HomePageGame({
     <InGameScene
       uiPhase={game.uiPhase}
       streetViewSrc={game.streetViewSrc}
+      streetViewInteractive={game.streetViewInteractive}
       showResultStage={game.showResultStage}
       isSingleplayer={game.isSingleplayer}
       resultOverlay={
@@ -107,6 +110,10 @@ export default function HomePageGame({
       totalRounds={game.totalRounds}
       modeName={game.modeName}
       mapName={game.mapName}
+      chatMessages={game.chatMessages}
+      selfUserId={game.selfUserId}
+      onSendChatMessage={actions.sendChatMessage}
+      onSendChatEmote={actions.sendChatEmote}
     />
   );
 }

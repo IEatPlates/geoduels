@@ -1,6 +1,7 @@
 import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { normalizeHTTPBase, normalizeWSBase } from "../../../lib/runtime-config";
 import type { AuthSessionSnapshot } from "../../auth/session";
+import type { MatchConfig } from "../../matchmaking/lib/queue-client";
 
 export type LobbyMember = {
   userId: string;
@@ -20,6 +21,7 @@ export type LobbySnapshot = {
   state: "open" | "in_match" | "started" | "closed" | "expired";
   mode: "duel";
   mapScope: string;
+  config?: MatchConfig;
   activeMatchId?: string;
   lastMatchId?: string;
   startedMatchId?: string;
@@ -29,6 +31,7 @@ export type LobbySnapshot = {
 export type LobbyAssignment = {
   matchId: string;
   mode?: string;
+  config?: MatchConfig;
   node: string;
   ticket: string;
   wsPath: string;
@@ -52,6 +55,16 @@ export async function createLobby(config: RuntimeConfig, accessToken: string): P
     body: JSON.stringify({ mode: "duel", mapScope: "world" }),
   });
   if (!resp.ok) throw new Error((await resp.text()) || "Lobby unavailable");
+  return resp.json();
+}
+
+export async function updateLobbySettings(config: RuntimeConfig, lobbyId: string, accessToken: string, matchConfig: MatchConfig): Promise<LobbySnapshot> {
+  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/settings`, {
+    method: "PATCH",
+    headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
+    body: JSON.stringify({ config: matchConfig }),
+  });
+  if (!resp.ok) throw new Error((await resp.text()) || "Could not update lobby settings");
   return resp.json();
 }
 

@@ -252,6 +252,7 @@ func (a *api) resolveMatchSession(ctx context.Context, userID, targetMatchID str
 						Status:                "live_connectable",
 						MatchID:               payload.MatchID,
 						Mode:                  payload.Mode,
+						Config:                payload.Config,
 						Node:                  payload.Node,
 						Ticket:                payload.Ticket,
 						WSPath:                payload.WSPath,
@@ -461,6 +462,7 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 	found := contracts.MatchFound{
 		MatchID: "solo-" + soloSessionID(),
 		Mode:    contracts.ModeSingleplayer,
+		Config:  contracts.NormalizeMatchConfig(contracts.MatchConfig{Ruleset: contracts.RulesetMoving}),
 		Players: []string{userID},
 		Profiles: map[string]contracts.PlayerProfile{
 			userID: {

@@ -5,9 +5,10 @@ type Props = {
   children: ReactNode;
   onFinalize: () => void;
   canFinalizeGuess: boolean;
+  guessSubmitted: boolean;
 };
 
-export default function MinimapPanel({ children, onFinalize, canFinalizeGuess }: Props) {
+export default function MinimapPanel({ children, onFinalize, canFinalizeGuess, guessSubmitted }: Props) {
   const RIGHT_GUTTER_PX = 80;
   const GESTURE_MOVE_THRESHOLD_PX = 6;
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -71,6 +72,7 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess }:
 
   const expanded = isDesktop ? desktopHovered : mobileExpanded;
   const reserveRightGutter = isDesktop || !mobileExpanded;
+  const finalizeLabel = guessSubmitted ? 'Waiting for opponent...' : canFinalizeGuess ? 'Guess' : 'Place Pin';
 
   const beginPointerGesture = (event: ReactPointerEvent) => {
     activePointerRef.current = {
@@ -171,11 +173,11 @@ export default function MinimapPanel({ children, onFinalize, canFinalizeGuess }:
           {children}
         </div>
         <button
-          className="font-hud min-h-11 w-full rounded-pill border border-emerald-200/35 bg-cta-gradient px-6 py-2 text-center text-sm uppercase tracking-[0.15em] text-white shadow-elev-3 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
+          className={`font-hud relative z-10 min-h-11 w-full rounded-pill border border-emerald-200/35 bg-cta-gradient px-6 py-2 text-center text-sm uppercase tracking-[0.15em] text-white shadow-elev-3 transition hover:brightness-110 disabled:cursor-not-allowed ${guessSubmitted ? 'opacity-45' : 'disabled:opacity-70'}`}
           onClick={handleFinalizeClick}
           disabled={!canFinalizeGuess}
         >
-          {canFinalizeGuess ? 'Guess' : 'Place Pin'}
+          {finalizeLabel}
         </button>
       </div>
     </>
