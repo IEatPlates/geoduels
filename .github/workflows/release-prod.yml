@@ -109,7 +109,7 @@ jobs:
             build_args: |
               NEXT_PUBLIC_APP_VERSION=${{ needs.release-meta.outputs.release_tag }}
               NEXT_PUBLIC_GIT_SHA=${{ needs.release-meta.outputs.release_sha }}
-              NEXT_PUBLIC_SITE_URL=${{ env.PRODUCTION_SITE_URL }}
+              NEXT_PUBLIC_SITE_URL=${{ vars.PRODUCTION_SITE_URL != '' && vars.PRODUCTION_SITE_URL || 'https://geoduels.io' }}
           - image: geoduels-location-ingest
             dockerfile: workers/location-ingest/Dockerfile
             context: .
