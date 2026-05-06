@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	InitialMMR       = 1000
+	InitialMMR       = 500
 	InitialRatingRD  = 220.0
 	MinimumRatingRD  = 110.0
 	MaximumRatingRD  = 220.0
-	MinimumRankedMMR = 1000
+	MinimumRankedMMR = 500
 	MaxDuelMMRDelta  = 80
+
+	LowMMRForgivenessEndMMR = 1000
 )
 
 var glickoC = math.Sqrt((MaximumRatingRD*MaximumRatingRD - MinimumRatingRD*MinimumRatingRD) / 365.0)
@@ -45,6 +47,8 @@ func CalculateDuelUpdates(p1, p2 State, winner string, now time.Time) (Update, U
 
 	p1MMR = CapDelta(p1.MMR, p1MMR)
 	p2MMR = CapDelta(p2.MMR, p2MMR)
+	p1MMR = ApplyLowMMRLossForgiveness(p1.MMR, p1MMR)
+	p2MMR = ApplyLowMMRLossForgiveness(p2.MMR, p2MMR)
 	p1MMR = ClampRankedMMR(p1MMR)
 	p2MMR = ClampRankedMMR(p2MMR)
 
@@ -127,4 +131,20 @@ func CapDelta(current, next int) int {
 		return current - MaxDuelMMRDelta
 	}
 	return next
+}
+
+func ApplyLowMMRLossForgiveness(current, next int) int {
+	delta := next - current
+	if delta >= 0 || current >= LowMMRForgivenessEndMMR {
+		return next
+	}
+	if current <= MinimumRankedMMR {
+		return current
+	}
+	rangeSize := LowMMRForgivenessEndMMR - MinimumRankedMMR
+	if rangeSize <= 0 {
+		return next
+	}
+	factor := float64(current-MinimumRankedMMR) / float64(rangeSize)
+	return current + int(math.Round(float64(delta)*factor))
 }

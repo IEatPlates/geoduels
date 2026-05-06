@@ -1,7 +1,9 @@
-export const INITIAL_MMR = 1000;
+export const INITIAL_MMR = 500;
 export const INITIAL_RATING_RD = 220;
 export const MAX_DUEL_MMR_DELTA = 80;
 
+const MIN_RANKED_MMR = 500;
+const LOW_MMR_FORGIVENESS_END_MMR = 1000;
 const MIN_RATING_RD = 110;
 const MAX_RATING_RD = 220;
 const GLICKO_C = Math.sqrt((MAX_RATING_RD ** 2 - MIN_RATING_RD ** 2) / 365);
@@ -31,8 +33,10 @@ export function calculateDuelEloDeltas(
 
   const selfNext = calculateGlickoRating(selfElo, selfRd, opponentElo, opponentRd, selfScore);
   const opponentNext = calculateGlickoRating(opponentElo, opponentRd, selfElo, selfRd, opponentScore);
-  const selfNextRating = capRatingDelta(selfElo, selfNext.rating);
-  const opponentNextRating = capRatingDelta(opponentElo, opponentNext.rating);
+  const selfNextRating = clampRankedMmr(applyLowMmrLossForgiveness(selfElo, capRatingDelta(selfElo, selfNext.rating)));
+  const opponentNextRating = clampRankedMmr(
+    applyLowMmrLossForgiveness(opponentElo, capRatingDelta(opponentElo, opponentNext.rating))
+  );
 
   return {
     selfDelta: selfNextRating - selfElo,
@@ -101,4 +105,20 @@ function capRatingDelta(current: number, next: number): number {
   if (delta > MAX_DUEL_MMR_DELTA) return current + MAX_DUEL_MMR_DELTA;
   if (delta < -MAX_DUEL_MMR_DELTA) return current - MAX_DUEL_MMR_DELTA;
   return next;
+}
+
+function applyLowMmrLossForgiveness(current: number, next: number): number {
+  const delta = next - current;
+  if (delta >= 0 || current >= LOW_MMR_FORGIVENESS_END_MMR) return next;
+  if (current <= MIN_RANKED_MMR) return current;
+
+  const rangeSize = LOW_MMR_FORGIVENESS_END_MMR - MIN_RANKED_MMR;
+  if (rangeSize <= 0) return next;
+
+  const factor = (current - MIN_RANKED_MMR) / rangeSize;
+  return current + Math.round(delta * factor);
+}
+
+function clampRankedMmr(mmr: number): number {
+  return mmr < MIN_RANKED_MMR ? MIN_RANKED_MMR : mmr;
 }
