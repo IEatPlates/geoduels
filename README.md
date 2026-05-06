@@ -1,6 +1,10 @@
+<img src="apps/web/public/icon.png" height=64 />
+
 # GeoDuels
 
 GeoDuels is a production-ready + dev-ready GeoGuessr-style platform built for horizontal scaling.
+
+https://geoduels.io/
 
 ## Architecture
 
