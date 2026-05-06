@@ -1,0 +1,188 @@
+[
+  {
+    "lat": 4.589124369956191,
+    "lng": 101.35699319700318,
+    "heading": 313,
+    "extra": {
+      "tags": [
+        "MY",
+        "MY-06",
+        "2025",
+        "Elevation[1400-1299]m",
+        "ClosestRiver[1300-1399]",
+        "Roads25-1",
+        "Buildings100-0",
+        "elevated"
+      ]
+    },
+    "panoId": "hK3mf26vqnqkcd4jk4bZEQ"
+  },
+  {
+    "lat": 1.4516692341288004,
+    "lng": 35.013952128777305,
+    "heading": 206,
+    "extra": {
+      "tags": [
+        "KE",
+        "KE-47",
+        "2022",
+        "sand",
+        "Elevation[1300-1199]m",
+        "ClosestRiver[2800-2899]",
+        "Roads25-1",
+        "Buildings100-0",
+        "elevated"
+      ]
+    },
+    "panoId": "AqcQfHBthoxDzVd2nGIlTA"
+  },
+  {
+    "lat": -22.3294573537904,
+    "lng": 28.382671868301234,
+    "heading": 358,
+    "extra": {
+      "tags": [
+        "BW",
+        "BW-CE",
+        "2012",
+        "asphalt",
+        "Elevation[ 700- 599]m",
+        "ClosestRiver[2700-2799]",
+        "Roads25-1",
+        "Buildings100-0",
+        "fill"
+      ]
+    },
+    "panoId": "Kz9pR6r20mrRmFVL2OKfUg"
+  },
+  {
+    "lat": 6.586521959752184,
+    "lng": -1.6627131167942537,
+    "heading": 9,
+    "extra": {
+      "tags": [
+        "GH",
+        "GH-AH",
+        "2016",
+        "Elevation[ 200-  99]m",
+        "ClosestLake[25600-25699]",
+        "ClosestRiver[5500-5599]",
+        "Roads25-1",
+        "Buildings100-0",
+        "fill"
+      ]
+    },
+    "panoId": "zPdG2Smu8q7LPqZVvJJ89g"
+  },
+  {
+    "lat": 47.79880482987235,
+    "lng": -1.4687567870589742,
+    "heading": 175,
+    "extra": {
+      "tags": [
+        "FR",
+        "FR-44",
+        "2025",
+        "Elevation[   0--101]m",
+        "ClosestRiver[   0-  99]",
+        "Roads25-1",
+        "Buildings100-0",
+        "fill"
+      ]
+    },
+    "panoId": "lMgXXfpVSCShO6LRdEEbpA"
+  },
+  {
+    "lat": -2.9156710307947917,
+    "lng": 101.44179685691866,
+    "heading": 302,
+    "extra": {
+      "tags": [
+        "ID",
+        "ID-BE",
+        "2025",
+        "Elevation[   0--101]m",
+        "ClosestCoast[4100-4199]",
+        "ClosestRiver[ 200- 299]",
+        "Roads25-3",
+        "Buildings100-0",
+        "intersection"
+      ]
+    },
+    "panoId": "U3JGRaxBMpJrqXk56U96ww"
+  },
+  {
+    "lat": 42.096352031712456,
+    "lng": -2.7901112541251476,
+    "heading": 280,
+    "extra": {
+      "tags": [
+        "ES",
+        "ES-RI",
+        "2024",
+        "Elevation[1500-1399]m",
+        "ClosestRiver[ 300- 399]",
+        "Roads25-4",
+        "Buildings100-0",
+        "fill"
+      ]
+    },
+    "panoId": "un46DxvF9P_dG5pcaWs9wA"
+  },
+  {
+    "lat": 17.106681002741322,
+    "lng": -89.68038283244336,
+    "heading": 354,
+    "extra": {
+      "tags": [
+        "GT",
+        "GT-17",
+        "2016",
+        "Elevation[ 200-  99]m",
+        "Roads25-3",
+        "Buildings100-5",
+        "intersection"
+      ]
+    },
+    "panoId": "WWSzeRry5frigtcj5Prs0g"
+  },
+  {
+    "lat": 65.73419187100295,
+    "lng": -14.554977856047971,
+    "heading": 285,
+    "extra": {
+      "tags": [
+        "IS",
+        "IS-7",
+        "2024",
+        "gravel",
+        "Elevation[   0--101]m",
+        "ClosestCoast[7300-7399]",
+        "ClosestRiver[ 600- 699]",
+        "Roads25-1",
+        "Buildings100-0",
+        "fill"
+      ]
+    },
+    "panoId": "nXjr-6B2TQ4ojS4DOYNDIg"
+  },
+  {
+    "lat": -34.0947939362766,
+    "lng": 135.34100360120235,
+    "heading": 142,
+    "extra": {
+      "tags": [
+        "AU",
+        "AU-SA",
+        "2023",
+        "unpaved",
+        "Elevation[   0--101]m",
+        "ClosestCoast[6000-6099]",
+        "Roads25-4",
+        "Buildings100-0",
+        "intersection"
+      ]
+    },
+    "panoId": "tLCWxD490Wqc_IzSedTd3w"
+  }
+]

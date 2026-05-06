@@ -48,5 +48,6 @@ tmp/
 
 # data
 datasets/*.json
+!datasets/a-source-world.sample.json
 datasets/vali
 vali-fun-balanced-world-1k.json
