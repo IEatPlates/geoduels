@@ -238,6 +238,20 @@ type ClientSelfState struct {
 	CurrentGuess *ClientGuessPoint `json:"currentGuess,omitempty"`
 }
 
+type ClientRoundLocation struct {
+	PanoID  *string  `json:"panoId,omitempty"`
+	Heading *float64 `json:"heading,omitempty"`
+	Pitch   *float64 `json:"pitch,omitempty"`
+}
+
+type ClientRoundState struct {
+	RoundID       string              `json:"roundId"`
+	RoundNumber   int                 `json:"roundNumber"`
+	RoundDeadline time.Time           `json:"roundDeadline"`
+	TimerStarted  bool                `json:"timerStarted"`
+	Location      ClientRoundLocation `json:"location"`
+}
+
 type ClientMatchSnapshot struct {
 	MatchID         string                        `json:"matchId"`
 	Mode            MatchMode                     `json:"mode"`
@@ -248,7 +262,7 @@ type ClientMatchSnapshot struct {
 	RoundPhase      RoundPhase                    `json:"roundPhase"`
 	PhaseStartedAt  int64                         `json:"phaseStartedAt"`
 	PhaseEndsAt     int64                         `json:"phaseEndsAt"`
-	CurrentRound    *RoundState                   `json:"currentRound,omitempty"`
+	CurrentRound    *ClientRoundState             `json:"currentRound,omitempty"`
 	LastRoundResult *RoundResult                  `json:"lastRoundResult,omitempty"`
 	RoundResults    []*RoundResult                `json:"roundResults,omitempty"`
 	RoundMSLeft     int64                         `json:"roundMsLeft"`
@@ -274,7 +288,7 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 		RoundPhase:      snap.RoundPhase,
 		PhaseStartedAt:  snap.PhaseStartedAt,
 		PhaseEndsAt:     snap.PhaseEndsAt,
-		CurrentRound:    snap.CurrentRound,
+		CurrentRound:    clientRoundState(snap.CurrentRound),
 		LastRoundResult: snap.LastRoundResult,
 		RoundResults:    snap.RoundResults,
 		RoundMSLeft:     snap.RoundMSLeft,
@@ -307,6 +321,23 @@ func ClientSnapshotForPlayer(snap *MatchSnapshot, userID string) *ClientMatchSna
 		}
 	}
 	return client
+}
+
+func clientRoundState(round *RoundState) *ClientRoundState {
+	if round == nil {
+		return nil
+	}
+	return &ClientRoundState{
+		RoundID:       round.RoundID,
+		RoundNumber:   round.RoundNumber,
+		RoundDeadline: round.RoundDeadline,
+		TimerStarted:  round.TimerStarted,
+		Location: ClientRoundLocation{
+			PanoID:  round.Location.PanoID,
+			Heading: round.Location.Heading,
+			Pitch:   round.Location.Pitch,
+		},
+	}
 }
 
 func clientSelfState(snap *MatchSnapshot, player PlayerState) *ClientSelfState {

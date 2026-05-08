@@ -41,6 +41,46 @@ func TestClientSnapshotForPlayerKeepsLiveGuessesOutOfSharedPlayers(t *testing.T)
 	}
 }
 
+func TestClientSnapshotForPlayerStripsLiveRoundCoordinatesAndKeepsPanoID(t *testing.T) {
+	panoID := "pano-123"
+	heading := 90.0
+	pitch := -5.0
+	snap := &MatchSnapshot{
+		Phase:      PhaseLive,
+		RoundPhase: RoundPhaseLive,
+		CurrentRound: &RoundState{
+			RoundID:     "round-1",
+			RoundNumber: 1,
+			Location: LocationPoint{
+				Lat:     10.5,
+				Lng:     20.5,
+				PanoID:  &panoID,
+				Heading: &heading,
+				Pitch:   &pitch,
+			},
+		},
+		Players: map[string]PlayerState{
+			"u1": {UserID: "u1"},
+		},
+	}
+
+	client := ClientSnapshotForPlayer(snap, "u1")
+	encoded, err := json.Marshal(client)
+	if err != nil {
+		t.Fatalf("marshal client snapshot: %v", err)
+	}
+	payload := string(encoded)
+	if strings.Contains(payload, `"lat":10.5`) || strings.Contains(payload, `"lng":20.5`) {
+		t.Fatalf("expected live round coordinates to be stripped, got %s", payload)
+	}
+	if !strings.Contains(payload, `"panoId":"pano-123"`) {
+		t.Fatalf("expected live round pano ID, got %s", payload)
+	}
+	if !strings.Contains(payload, `"heading":90`) || !strings.Contains(payload, `"pitch":-5`) {
+		t.Fatalf("expected live round camera fields, got %s", payload)
+	}
+}
+
 func TestClientSnapshotForPlayerRevealsGuessesInRoundResults(t *testing.T) {
 	snap := &MatchSnapshot{
 		Phase:      PhaseRoundResult,

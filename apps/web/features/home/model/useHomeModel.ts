@@ -443,7 +443,6 @@ export function useHomeModel(options?: {
       if (!matchId || handledLobbyMatchRef.current === matchId) {
         return;
       }
-      handledLobbyMatchRef.current = matchId;
       const resolved = await fetchMatchSession(
         config,
         auth.accessToken,
@@ -451,9 +450,12 @@ export function useHomeModel(options?: {
         controller.signal,
       );
       if (resolved.status === "live_connectable") {
-        await matchController.resumeResolvedMatch(resolved, {
+        const connected = await matchController.resumeResolvedMatch(resolved, {
           playMatchFoundSfx: true,
         });
+        if (connected) {
+          handledLobbyMatchRef.current = matchId;
+        }
       }
     };
     void streamLobby(

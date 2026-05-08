@@ -169,13 +169,8 @@ func (a *api) matchSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	identity, err := a.store.GetIdentity(claims.Sub)
-	if err != nil {
+	if _, err := a.store.GetIdentity(claims.Sub); err != nil {
 		http.Error(w, "identity not found", http.StatusUnauthorized)
-		return
-	}
-	if identity.AccountType == "guest" {
-		http.Error(w, "guest reports are not allowed", http.StatusForbidden)
 		return
 	}
 	matchID := strings.TrimSpace(mux.Vars(r)["id"])

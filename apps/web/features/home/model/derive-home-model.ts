@@ -34,8 +34,9 @@ export function formatHpPct(maxHP: number, hp: number) {
 function buildStreetViewSrc(snapshot: Snapshot | null, googleEmbedKey: string) {
   if (!snapshot?.currentRound) return "";
   const loc = snapshot.currentRound.location;
+  if (!loc.panoId) return "";
   const params = new URLSearchParams({
-    location: `${loc.lat},${loc.lng}`,
+    pano: loc.panoId,
     key: googleEmbedKey,
     fov: "100",
     language: "en",

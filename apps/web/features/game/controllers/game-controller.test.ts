@@ -18,7 +18,7 @@ function createSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     currentRound: {
       roundId: 'round-1',
       roundNumber: 1,
-      location: { lat: 0, lng: 0 }
+      location: { panoId: 'pano-123' }
     },
     players: {
       self: {
@@ -237,7 +237,7 @@ describe('GameController', () => {
       currentRound: {
         roundId: 'round-2',
         roundNumber: 2,
-        location: { lat: 0, lng: 0 }
+        location: { panoId: 'pano-123' }
       },
       lastRoundResult: undefined
     });
@@ -252,7 +252,7 @@ describe('GameController', () => {
       currentRound: {
         roundId: 'round-2',
         roundNumber: 2,
-        location: { lat: 0, lng: 0 }
+        location: { panoId: 'pano-123' }
       },
       lastRoundResult: undefined
     });
@@ -327,7 +327,7 @@ describe('GameController', () => {
       currentRound: {
         roundId: 'round-2',
         roundNumber: 2,
-        location: { lat: 0, lng: 0 }
+        location: { panoId: 'pano-123' }
       },
       lastRoundResult: undefined
     });
@@ -345,7 +345,7 @@ describe('GameController', () => {
       currentRound: {
         roundId: 'round-2',
         roundNumber: 2,
-        location: { lat: 0, lng: 0 }
+        location: { panoId: 'pano-123' }
       },
       lastRoundResult: undefined
     });
@@ -646,7 +646,7 @@ describe('GameController', () => {
       currentRound: {
         roundId: 'round-2',
         roundNumber: 2,
-        location: { lat: 0, lng: 0 }
+        location: { panoId: 'pano-123' }
       },
       players: {
         self: {
@@ -845,7 +845,7 @@ describe('GameController', () => {
           roundId: 'round-1',
           roundNumber: 1,
           timerStarted: false,
-          location: { lat: 0, lng: 0 }
+          location: { panoId: 'pano-123' }
         },
         players: {
           self: {

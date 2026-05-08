@@ -280,12 +280,12 @@ func googleOnboardedAt(linkedGuest bool) any {
 	return nil
 }
 
-func chooseGoogleIdentityUser(existingGoogleUserID, existingRegisteredEmailUserID, linkUserID, linkAccountType string) (string, bool) {
+func chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType string) (string, bool) {
 	if existingGoogleUserID != "" {
 		return existingGoogleUserID, false
 	}
-	if existingRegisteredEmailUserID != "" {
-		return existingRegisteredEmailUserID, false
+	if existingEmailUserID != "" {
+		return existingEmailUserID, existingEmailAccountType == "guest"
 	}
 	if linkUserID != "" && linkAccountType == "guest" {
 		return linkUserID, true
@@ -320,21 +320,22 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 	if err := row.Scan(&existingGoogleUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Identity{}, err
 	}
-	var existingRegisteredEmailUserID string
+	var existingEmailUserID string
+	var existingEmailAccountType string
 	if existingGoogleUserID == "" {
 		row = tx.QueryRow(ctx, `
-			select id
+			select id, account_type
 			from users
 			where lower(email) = lower($1)
-				and account_type = 'registered'
+			order by case when account_type = 'registered' then 0 else 1 end, created_at asc
 			limit 1
 		`, email)
-		if err := row.Scan(&existingRegisteredEmailUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err := row.Scan(&existingEmailUserID, &existingEmailAccountType); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Identity{}, err
 		}
 	}
 	var linkAccountType string
-	if existingGoogleUserID == "" && existingRegisteredEmailUserID == "" && linkUserID != "" {
+	if existingGoogleUserID == "" && existingEmailUserID == "" && linkUserID != "" {
 		row = tx.QueryRow(ctx, `
 			select account_type
 			from users
@@ -344,7 +345,7 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 			return Identity{}, err
 		}
 	}
-	userID, linkedGuest := chooseGoogleIdentityUser(existingGoogleUserID, existingRegisteredEmailUserID, linkUserID, linkAccountType)
+	userID, linkedGuest := chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
 	onboardedAt := googleOnboardedAt(linkedGuest)
 
 	if _, err := tx.Exec(ctx, `
@@ -362,21 +363,40 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 	`, userID, email, googleName, nullable(avatarURL), onboardedAt); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `
-		insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-		values($1, 'google', $2, $3, $4, $5, now())
-		on conflict (provider, provider_user_id) do update set
-			user_id = excluded.user_id,
-			email = excluded.email,
-			provider_name = excluded.provider_name,
-			avatar_url = case
-				when excluded.avatar_url is null then user_identities.avatar_url
-				when excluded.avatar_url = '' then user_identities.avatar_url
-				else excluded.avatar_url
-			end,
-			last_seen_at = now()
-	`, userID, googleSub, email, googleName, nullable(avatarURL)); err != nil {
-		return Identity{}, err
+	if existingGoogleUserID != "" {
+		if _, err := tx.Exec(ctx, `
+			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
+			values($1, 'google', $2, $3, $4, $5, now())
+			on conflict (provider, provider_user_id) do update set
+				user_id = excluded.user_id,
+				email = excluded.email,
+				provider_name = excluded.provider_name,
+				avatar_url = case
+					when excluded.avatar_url is null then user_identities.avatar_url
+					when excluded.avatar_url = '' then user_identities.avatar_url
+					else excluded.avatar_url
+				end,
+				last_seen_at = now()
+		`, userID, googleSub, email, googleName, nullable(avatarURL)); err != nil {
+			return Identity{}, err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
+			values($1, 'google', $2, $3, $4, $5, now())
+			on conflict (user_id, provider) do update set
+				provider_user_id = excluded.provider_user_id,
+				email = excluded.email,
+				provider_name = excluded.provider_name,
+				avatar_url = case
+					when excluded.avatar_url is null then user_identities.avatar_url
+					when excluded.avatar_url = '' then user_identities.avatar_url
+					else excluded.avatar_url
+				end,
+				last_seen_at = now()
+		`, userID, googleSub, email, googleName, nullable(avatarURL)); err != nil {
+			return Identity{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		insert into ranks (user_id, mode, mmr, season_id)

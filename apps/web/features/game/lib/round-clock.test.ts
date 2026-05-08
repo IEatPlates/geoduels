@@ -15,7 +15,7 @@ function createLiveSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
       roundId: 'round-1',
       roundNumber: 1,
       timerStarted: true,
-      location: { lat: 0, lng: 0 }
+      location: { panoId: 'pano-123' }
     },
     players: {},
     eventSequence: 1,

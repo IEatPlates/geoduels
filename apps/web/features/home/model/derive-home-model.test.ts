@@ -47,7 +47,7 @@ function createSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     currentRound: {
       roundId: 'round-1',
       roundNumber: 3,
-      location: { lat: 1, lng: 2 }
+      location: { panoId: 'pano-123' }
     },
     players: {
       self: {
@@ -179,7 +179,7 @@ describe('deriveHomeModel', () => {
           roundId: 'round-1',
           roundNumber: 3,
           timerStarted: false,
-          location: { lat: 1, lng: 2 }
+          location: { panoId: 'pano-123' }
         }
       })),
       game: createGameState({ roundMSLeft: 0, displayRoundSeconds: 0 }),
@@ -205,7 +205,7 @@ describe('deriveHomeModel', () => {
         currentRound: {
           roundId: 'round-1',
           roundNumber: 1,
-          location: { lat: 1, lng: 2 }
+          location: { panoId: 'pano-123' }
         }
       })),
       game: createGameState({ roundMSLeft: 0, displayRoundSeconds: 0 }),
@@ -241,14 +241,18 @@ describe('deriveHomeModel', () => {
     expect(model.game.opponentDisconnected).toBe(true);
   });
 
-  it('includes the round camera heading and pitch in the Street View URL', () => {
+  it('prefers the round pano ID in the Street View URL', () => {
     const model = deriveHomeModel({
       auth: createAuthState(),
       match: createMatchState(createSnapshot({
         currentRound: {
           roundId: 'round-1',
           roundNumber: 3,
-          location: { lat: 1, lng: 2, heading: 123.5, pitch: -4 }
+          location: {
+            panoId: 'pano-123',
+            heading: 123.5,
+            pitch: -4
+          }
         }
       })),
       game: createGameState(),
@@ -257,7 +261,8 @@ describe('deriveHomeModel', () => {
     });
 
     const streetViewURL = new URL(model.game.streetViewSrc);
-    expect(streetViewURL.searchParams.get('location')).toBe('1,2');
+    expect(streetViewURL.searchParams.get('pano')).toBe('pano-123');
+    expect(streetViewURL.searchParams.get('location')).toBeNull();
     expect(streetViewURL.searchParams.get('heading')).toBe('123.5');
     expect(streetViewURL.searchParams.get('pitch')).toBe('-4');
   });

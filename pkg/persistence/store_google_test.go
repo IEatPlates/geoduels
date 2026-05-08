@@ -13,14 +13,15 @@ func TestGoogleOnboardedAt(t *testing.T) {
 
 func TestChooseGoogleIdentityUser(t *testing.T) {
 	tests := []struct {
-		name                          string
-		existingGoogleUserID          string
-		existingRegisteredEmailUserID string
-		linkUserID                    string
-		linkAccountType               string
-		wantUserID                    string
-		wantLinkedGuest               bool
-		wantGenerated                 bool
+		name                     string
+		existingGoogleUserID     string
+		existingEmailUserID      string
+		existingEmailAccountType string
+		linkUserID               string
+		linkAccountType          string
+		wantUserID               string
+		wantLinkedGuest          bool
+		wantGenerated            bool
 	}{
 		{
 			name:                 "existing google identity wins over guest link",
@@ -30,11 +31,21 @@ func TestChooseGoogleIdentityUser(t *testing.T) {
 			wantUserID:           "registered-google-user",
 		},
 		{
-			name:                          "existing registered email wins over guest link",
-			existingRegisteredEmailUserID: "registered-email-user",
-			linkUserID:                    "guest-user",
-			linkAccountType:               "guest",
-			wantUserID:                    "registered-email-user",
+			name:                     "existing registered email wins over guest link",
+			existingEmailUserID:      "registered-email-user",
+			existingEmailAccountType: "registered",
+			linkUserID:               "guest-user",
+			linkAccountType:          "guest",
+			wantUserID:               "registered-email-user",
+		},
+		{
+			name:                     "existing guest email is upgraded before guest link",
+			existingEmailUserID:      "email-guest-user",
+			existingEmailAccountType: "guest",
+			linkUserID:               "current-guest-user",
+			linkAccountType:          "guest",
+			wantUserID:               "email-guest-user",
+			wantLinkedGuest:          true,
 		},
 		{
 			name:            "guest link upgrades guest when no registered account exists",
@@ -56,9 +67,9 @@ func TestChooseGoogleIdentityUser(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotUserID, gotLinkedGuest := chooseGoogleIdentityUser(tt.existingGoogleUserID, tt.existingRegisteredEmailUserID, tt.linkUserID, tt.linkAccountType)
+			gotUserID, gotLinkedGuest := chooseGoogleIdentityUser(tt.existingGoogleUserID, tt.existingEmailUserID, tt.existingEmailAccountType, tt.linkUserID, tt.linkAccountType)
 			if tt.wantGenerated {
-				if gotUserID == "" || gotUserID == tt.linkUserID || gotUserID == tt.existingGoogleUserID || gotUserID == tt.existingRegisteredEmailUserID {
+				if gotUserID == "" || gotUserID == tt.linkUserID || gotUserID == tt.existingGoogleUserID || gotUserID == tt.existingEmailUserID {
 					t.Fatalf("expected generated user id, got %q", gotUserID)
 				}
 			} else if gotUserID != tt.wantUserID {

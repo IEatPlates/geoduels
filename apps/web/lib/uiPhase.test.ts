@@ -10,7 +10,7 @@ const baseSnapshot: Snapshot = {
   phaseStartedAt: 1000,
   phaseEndsAt: 2000,
   roundMsLeft: 30000,
-  currentRound: { roundId: 'r1', roundNumber: 1, location: { lat: 1, lng: 2 } },
+  currentRound: { roundId: 'r1', roundNumber: 1, location: { panoId: 'pano-123' } },
   players: {},
   eventSequence: 1
 };

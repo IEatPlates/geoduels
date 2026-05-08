@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -207,6 +208,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := a.store.UpsertGoogleIdentity(idClaims.Sub, email, displayName, idClaims.Picture, state.LinkSub)
 	if err != nil {
+		log.Printf("google oauth callback: persist identity failed: %v", err)
 		payload["error"] = "persist identity failed"
 		return
 	}
