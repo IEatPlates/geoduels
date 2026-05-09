@@ -140,6 +140,21 @@ type EloRefundSummary struct {
 	TotalRefunded int `json:"totalRefunded"`
 }
 
+type CheatingBanSummary struct {
+	UserID          string           `json:"userId"`
+	Reason          string           `json:"reason,omitempty"`
+	Refunds         EloRefundSummary `json:"refunds"`
+	IPSignupBanned  bool             `json:"ipSignupBanned"`
+	ArchivedCaseIDs []int64          `json:"archivedCaseIds,omitempty"`
+}
+
+type UserNotification struct {
+	ID        int64           `json:"id"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
 type SignupIPBan struct {
 	ID        int64     `json:"id"`
 	IPAddress string    `json:"ipAddress"`
@@ -196,6 +211,7 @@ type Store interface {
 	SetUserModerator(userID string, isModerator bool) error
 	SearchPlayers(query string, limit int) ([]AdminPlayerSummary, error)
 	SetPlayerBan(userID, reason string, banned bool) error
+	BanPlayerForCheating(userID, reason, actorUserID string) (CheatingBanSummary, error)
 	ClearReporterMute(userID string) error
 	GetLobbyChangelog(defaultContent LobbyChangelogContent) (LobbyChangelogContent, error)
 	SetLobbyChangelog(content LobbyChangelogContent) error
@@ -222,6 +238,8 @@ type Store interface {
 	GetModerationCase(caseID int64) (ModerationCaseDetail, error)
 	AddModerationCaseAction(params ModerationCaseActionParams) (ModerationCaseDetail, error)
 	IssueEloRefundsForCheater(userID string, lookback time.Duration) (EloRefundSummary, error)
+	ListUserNotifications(userID string, limit int) ([]UserNotification, error)
+	MarkUserNotificationRead(userID string, notificationID int64) error
 	ClaimPendingNotification(notificationType string, now time.Time) (NotificationOutboxItem, bool, error)
 	MarkNotificationSent(id int64) error
 	MarkNotificationFailed(id int64, nextAttemptAt time.Time, lastError string) error
@@ -1009,7 +1027,12 @@ func (s *pgStore) CreateAuthSession(userID, refreshTokenHash string, expiresAt t
 	sessionID := newUserID()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	row := s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RefreshTokenRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
 		insert into auth_sessions(
 			id,
 			user_id,
@@ -1044,6 +1067,18 @@ func (s *pgStore) CreateAuthSession(userID, refreshTokenHash string, expiresAt t
 		&rec.UserAgent,
 		&rec.IPAddress,
 	); err != nil {
+		return RefreshTokenRecord{}, err
+	}
+	if strings.TrimSpace(params.IPAddress) != "" {
+		if _, err := tx.Exec(ctx, `
+			update users
+			set registration_ip_address = coalesce(nullif(trim(registration_ip_address), ''), $2)
+			where id = $1
+		`, userID, strings.TrimSpace(params.IPAddress)); err != nil {
+			return RefreshTokenRecord{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return RefreshTokenRecord{}, err
 	}
 	return rec, nil
@@ -1635,7 +1670,13 @@ func (s *pgStore) RecordFinalMatchSnapshot(matchID string, snapshot []byte) erro
 	if err := recordMatchHistory(ctx, tx, matchID, snap, string(snapshot)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if snap.Mode == contracts.ModeDuel && !snap.Unranked {
+		_ = s.EvaluateAutoCheatBansForMatch(matchID)
+	}
+	return nil
 }
 
 func recordMatchHistory(ctx context.Context, tx pgx.Tx, matchID string, snap contracts.MatchSnapshot, rawSnapshot string) error {
@@ -1648,6 +1689,20 @@ func recordMatchHistory(ctx context.Context, tx pgx.Tx, matchID string, snap con
 	startedAt := snapshotStartedAt(snap)
 	endedAt := time.Now()
 	winner := snapshotWinner(snap)
+	privateLobbyMatch := false
+	if snap.Mode == contracts.ModeDuel {
+		if err := tx.QueryRow(ctx, `
+			select exists (
+				select 1
+				from lobbies
+				where active_match_id = $1
+				   or started_match_id = $1
+				   or last_match_id = $1
+			)
+		`, matchID).Scan(&privateLobbyMatch); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		insert into match_history(match_id, mode, state, started_at, ended_at, winner_user_id, snapshot_json)
 		values($1, $2, $3, $4, $5, nullif($6, ''), $7::jsonb)
@@ -1667,13 +1722,15 @@ func recordMatchHistory(ctx context.Context, tx pgx.Tx, matchID string, snap con
 			displayName = userID
 		}
 		if _, err := tx.Exec(ctx, `
-			insert into match_players(match_id, user_id, display_name, mmr, hp)
-			values($1, $2, $3, $4, $5)
+			insert into match_players(match_id, user_id, display_name, mmr, hp, rating_rd, ranked_games_played)
+			values($1, $2, $3, $4, $5, $6, $7)
 			on conflict (match_id, user_id) do update set
 				display_name = excluded.display_name,
 				mmr = excluded.mmr,
-				hp = excluded.hp
-		`, matchID, userID, displayName, player.MMR, player.HP); err != nil {
+				hp = excluded.hp,
+				rating_rd = excluded.rating_rd,
+				ranked_games_played = excluded.ranked_games_played
+		`, matchID, userID, displayName, player.MMR, player.HP, clampRatingRD(player.RatingRD), player.RankedGamesPlayed); err != nil {
 			return err
 		}
 	}
@@ -1702,9 +1759,56 @@ func recordMatchHistory(ctx context.Context, tx pgx.Tx, matchID string, snap con
 			`, matchID, round.RoundID, round.RoundNumber, userID, result.Lat, result.Lng, round.ActualLocation.Lat, round.ActualLocation.Lng, result.DistanceKm, result.Score, guessUnixMS, guessMS); err != nil {
 				return err
 			}
+			if snap.Mode == contracts.ModeDuel && !snap.Unranked && !privateLobbyMatch && result.GuessMS > 0 {
+				occurredAt := endedAt
+				if result.GuessUnixMS > 0 {
+					occurredAt = time.UnixMilli(result.GuessUnixMS)
+				}
+				if _, err := tx.Exec(ctx, `
+					insert into ranked_guess_events(
+						user_id, match_id, round_id, round_number, ruleset, score, guess_ms, evidence, occurred_at
+					)
+					values($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					on conflict (match_id, round_id, user_id) do update set
+						score = excluded.score,
+						guess_ms = excluded.guess_ms,
+						evidence = excluded.evidence,
+						occurred_at = excluded.occurred_at
+				`, userID, matchID, round.RoundID, round.RoundNumber, string(contracts.NormalizeRuleset(snap.Config.Ruleset)), result.Score, result.GuessMS, guessEvidence(result.Score, result.GuessMS), occurredAt); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
+}
+
+func guessEvidence(score int, guessMS int64) float64 {
+	if score < 4900 || guessMS <= 0 || guessMS > 15000 {
+		return 0
+	}
+	seconds := float64(guessMS) / 1000.0
+	scoreExcess := float64(score-4900) / 100.0
+	if scoreExcess < 0 {
+		scoreExcess = 0
+	}
+	speed := (15.0 - seconds) / 12.0
+	if speed < 0 {
+		speed = 0
+	}
+	if speed > 1.25 {
+		speed = 1.25
+	}
+	evidence := 0.75 + scoreExcess*4.0
+	evidence *= speed
+	if score >= 5000 && guessMS <= 3000 {
+		evidence += 5
+	} else if score >= 4990 && guessMS <= 5000 {
+		evidence += 3
+	} else if score >= 4950 && guessMS <= 5000 {
+		evidence += 1.5
+	}
+	return evidence
 }
 
 func snapshotStartedAt(snap contracts.MatchSnapshot) time.Time {
@@ -2135,6 +2239,14 @@ func (s *pgStore) ListModerationCases(status string, limit int) ([]ModerationCas
 		limit = 100
 	}
 	status = strings.TrimSpace(status)
+	statuses := []string{"new", "triaged", "reviewing", "watching"}
+	switch status {
+	case "archived":
+		statuses = []string{"actioned", "dismissed", "duplicate"}
+	case "":
+	default:
+		statuses = []string{status}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
@@ -2144,12 +2256,12 @@ func (s *pgStore) ListModerationCases(status string, limit int) ([]ModerationCas
 			coalesce(summary, ''), coalesce(assigned_to, ''),
 			latest_activity_at, created_at, notification_sent_at
 		from moderation_cases
-		where ($1 = '' or status = $1)
+		where status = any($1)
 		order by
 			case priority when 'urgent' then 0 when 'high' then 1 when 'medium' then 2 else 3 end,
 			latest_activity_at desc
 		limit $2
-	`, status, limit)
+	`, statuses, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -2425,15 +2537,18 @@ func (s *pgStore) RecomputeModerationProjections(limit int) (int, error) {
 		summary, notify, err := refreshModerationCaseSummary(ctx, tx, caseID)
 		if err == nil && notify {
 			payload := ModerationCaseNotificationPayload{
-				CaseID:              summary.ID,
-				TargetUserID:        summary.TargetUserID,
-				TargetDisplayName:   summary.TargetDisplayName,
-				Priority:            summary.Priority,
-				Score:               summary.Score,
-				ReportCount:         summary.ReportCount,
-				UniqueReporterCount: summary.UniqueReporterCount,
-				Categories:          summary.Categories,
-				LatestActivityAt:    summary.LatestActivityAt,
+				CaseID:               summary.ID,
+				TargetUserID:         summary.TargetUserID,
+				TargetDisplayName:    summary.TargetDisplayName,
+				Priority:             summary.Priority,
+				Score:                summary.Score,
+				ReporterScore:        summary.ReporterScore,
+				RecentReportPressure: summary.RecentReportPressure,
+				GameplayEvidence:     summary.GameplayEvidence,
+				ReportCount:          summary.ReportCount,
+				UniqueReporterCount:  summary.UniqueReporterCount,
+				Categories:           summary.Categories,
+				LatestActivityAt:     summary.LatestActivityAt,
 			}
 			err = enqueueNotificationOutbox(ctx, tx, "moderation_case_threshold", fmt.Sprintf("moderation_case:%d:threshold", caseID), payload)
 		}
@@ -2702,24 +2817,25 @@ func updateReporterReputationForCase(ctx context.Context, tx pgx.Tx, caseID int6
 	return err
 }
 
-func moderationPriority(score float64, uniqueReporters int) string {
-	if score >= 6 || uniqueReporters >= 6 {
+func moderationPriority(score float64) string {
+	if score >= 6 {
 		return "urgent"
 	}
-	if score >= 3 || uniqueReporters >= 3 {
+	if score >= 3 {
 		return "high"
 	}
-	if score >= 1.5 || uniqueReporters >= 2 {
+	if score >= 1.5 {
 		return "medium"
 	}
 	return "low"
 }
 
 func refreshModerationCaseSummary(ctx context.Context, tx pgx.Tx, caseID int64) (ModerationCaseSummary, bool, error) {
-	var score float64
+	var reporterScore float64
 	var reportCount, uniqueReporterCount int
 	var categoriesRaw string
 	var notificationSentAt *time.Time
+	var targetUserID string
 	if err := tx.QueryRow(ctx, `
 		with category_counts as (
 			select coalesce(jsonb_object_agg(category, count), '{}'::jsonb) as categories
@@ -2729,18 +2845,41 @@ func refreshModerationCaseSummary(ctx context.Context, tx pgx.Tx, caseID int64) 
 				where case_id = $1
 				group by category
 			) c
+		),
+		reporter_score_by_match as (
+			select least(1.25, sum(reporter_weight)) as match_score
+			from moderation_reports
+			where case_id = $1
+			group by match_id
+		),
+		report_stats as (
+			select
+				count(*)::int as report_count,
+				count(distinct reporter_user_id)::int as unique_reporter_count,
+				coalesce(max(reported_user_id), '') as target_user_id
+			from moderation_reports
+			where case_id = $1
 		)
 		select
-			coalesce(sum(reporter_weight), 0),
-			count(*)::int,
-			count(distinct reporter_user_id)::int,
-			coalesce((select categories from category_counts), '{}'::jsonb)::text
-		from moderation_reports
-		where case_id = $1
-	`, caseID).Scan(&score, &reportCount, &uniqueReporterCount, &categoriesRaw); err != nil {
+			coalesce((select sum(match_score) from reporter_score_by_match), 0),
+			report_stats.report_count,
+			report_stats.unique_reporter_count,
+			coalesce((select categories from category_counts), '{}'::jsonb)::text,
+			report_stats.target_user_id
+		from report_stats
+	`, caseID).Scan(&reporterScore, &reportCount, &uniqueReporterCount, &categoriesRaw, &targetUserID); err != nil {
 		return ModerationCaseSummary{}, false, err
 	}
-	priority := moderationPriority(score, uniqueReporterCount)
+	recentReportPressure, err := moderationRecentReportPressure(ctx, tx, targetUserID)
+	if err != nil {
+		return ModerationCaseSummary{}, false, err
+	}
+	gameplayEvidence, err := moderationGameplayEvidence(ctx, tx, targetUserID)
+	if err != nil {
+		return ModerationCaseSummary{}, false, err
+	}
+	score := reporterScore + recentReportPressure + gameplayEvidence
+	priority := moderationPriority(score)
 	if err := tx.QueryRow(ctx, `select notification_sent_at from moderation_cases where id = $1`, caseID).Scan(&notificationSentAt); err != nil {
 		return ModerationCaseSummary{}, false, err
 	}
@@ -2766,7 +2905,77 @@ func refreshModerationCaseSummary(ctx context.Context, tx pgx.Tx, caseID int64) 
 	if err != nil {
 		return ModerationCaseSummary{}, false, err
 	}
+	summary.ReporterScore = reporterScore
+	summary.RecentReportPressure = recentReportPressure
+	summary.GameplayEvidence = gameplayEvidence
 	return summary, shouldNotify, nil
+}
+
+func moderationRecentReportPressure(ctx context.Context, tx pgx.Tx, targetUserID string) (float64, error) {
+	targetUserID = strings.TrimSpace(targetUserID)
+	if targetUserID == "" {
+		return 0, nil
+	}
+	var recentGames, reportedGames int
+	if err := tx.QueryRow(ctx, `
+		with recent_matches as (
+			select mp.match_id
+			from match_players mp
+			join match_history h on h.match_id = mp.match_id
+			where mp.user_id = $1
+			order by h.ended_at desc, h.match_id desc
+			limit 10
+		)
+		select
+			count(*)::int,
+			count(distinct r.match_id)::int
+		from recent_matches rm
+		left join moderation_reports r
+			on r.match_id = rm.match_id
+			and r.reported_user_id = $1
+	`, targetUserID).Scan(&recentGames, &reportedGames); err != nil {
+		return 0, err
+	}
+	if recentGames <= 0 || reportedGames <= 0 {
+		return 0, nil
+	}
+	ratio := float64(reportedGames) / float64(recentGames)
+	confidence := float64(recentGames) / 5.0
+	if confidence > 1 {
+		confidence = 1
+	}
+	return 3.5 * math.Pow(ratio, 1.6) * confidence, nil
+}
+
+func moderationGameplayEvidence(ctx context.Context, tx pgx.Tx, targetUserID string) (float64, error) {
+	targetUserID = strings.TrimSpace(targetUserID)
+	if targetUserID == "" {
+		return 0, nil
+	}
+	var evidence10, evidence20 float64
+	if err := tx.QueryRow(ctx, `
+		with recent as (
+			select evidence, row_number() over (order by occurred_at desc, id desc) as rn
+			from ranked_guess_events
+			where user_id = $1
+			order by occurred_at desc, id desc
+			limit 20
+		)
+		select
+			coalesce(sum(evidence) filter (where rn <= 10), 0),
+			coalesce(sum(evidence), 0)
+		from recent
+	`, targetUserID).Scan(&evidence10, &evidence20); err != nil {
+		return 0, err
+	}
+	pressure := math.Max(evidence10/6.0, evidence20/10.0)
+	if pressure > 6 {
+		return 6, nil
+	}
+	if pressure < 0 {
+		return 0, nil
+	}
+	return pressure, nil
 }
 
 func (s *pgStore) ClaimPendingNotification(notificationType string, now time.Time) (NotificationOutboxItem, bool, error) {
@@ -2868,16 +3077,163 @@ func (s *pgStore) IssueEloRefundsForCheater(userID string, lookback time.Duratio
 	if err != nil {
 		return EloRefundSummary{}, err
 	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
+	defer tx.Rollback(ctx)
+	summary, err := issueCurrentMMRRefundsForCheater(ctx, tx, userID, "cheating_verdict", since)
+	if err != nil {
+		return EloRefundSummary{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return EloRefundSummary{}, err
+	}
+	return summary, nil
+}
+
+func (s *pgStore) BanPlayerForCheating(userID, reason, actorUserID string) (CheatingBanSummary, error) {
+	userID = strings.TrimSpace(userID)
+	reason = strings.TrimSpace(reason)
+	actorUserID = strings.TrimSpace(actorUserID)
+	if userID == "" {
+		return CheatingBanSummary{}, errors.New("userID required")
+	}
+	if reason == "" {
+		reason = "cheating"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CheatingBanSummary{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var registrationIP string
+	tag, err := tx.Exec(ctx, `
+		update users
+		set banned_at = coalesce(banned_at, now()),
+			ban_reason = $2
+		where id = $1
+	`, userID, reason)
+	if err != nil {
+		return CheatingBanSummary{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return CheatingBanSummary{}, errors.New("user not found")
+	}
+	if err := tx.QueryRow(ctx, `
+		select coalesce(registration_ip_address, '')
+		from users
+		where id = $1
+	`, userID).Scan(&registrationIP); err != nil {
+		return CheatingBanSummary{}, err
+	}
+
+	summary := CheatingBanSummary{UserID: userID, Reason: reason}
+	refunds, err := issueCurrentMMRRefundsForCheater(ctx, tx, userID, reason, time.Time{})
+	if err != nil {
+		return CheatingBanSummary{}, err
+	}
+	summary.Refunds = refunds
+
+	caseRows, err := tx.Query(ctx, `
+		update moderation_cases
+		set status = 'actioned',
+			resolved_at = coalesce(resolved_at, now()),
+			resolved_by = nullif($2, ''),
+			resolution = $3,
+			updated_at = now(),
+			latest_activity_at = now()
+		where target_user_id = $1
+			and status in ('new', 'triaged', 'reviewing', 'watching')
+		returning id
+	`, userID, actorUserID, reason)
+	if err != nil {
+		return CheatingBanSummary{}, err
+	}
+	for caseRows.Next() {
+		var caseID int64
+		if err := caseRows.Scan(&caseID); err != nil {
+			caseRows.Close()
+			return CheatingBanSummary{}, err
+		}
+		summary.ArchivedCaseIDs = append(summary.ArchivedCaseIDs, caseID)
+	}
+	if err := caseRows.Err(); err != nil {
+		caseRows.Close()
+		return CheatingBanSummary{}, err
+	}
+	caseRows.Close()
+	for _, caseID := range summary.ArchivedCaseIDs {
+		if err := updateReporterReputationForCase(ctx, tx, caseID, "confirmed"); err != nil {
+			return CheatingBanSummary{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into moderation_actions(case_id, actor_user_id, target_user_id, action_type, reason)
+			values($1, nullif($2, ''), $3, 'ban', nullif($4, ''))
+		`, caseID, actorUserID, userID, reason); err != nil {
+			return CheatingBanSummary{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into moderation_case_events(case_id, actor_user_id, event_type, body)
+			values($1, nullif($2, ''), 'action_ban', nullif($3, ''))
+		`, caseID, actorUserID, reason); err != nil {
+			return CheatingBanSummary{}, err
+		}
+	}
+
+	if registrationIP != "" {
+		var relatedCheater bool
+		if err := tx.QueryRow(ctx, `
+			select exists(
+				select 1
+				from users
+				where id <> $1
+					and registration_ip_address = $2
+					and banned_at >= now() - interval '7 days'
+					and (
+						lower(coalesce(ban_reason, '')) like '%cheat%'
+						or lower(coalesce(ban_reason, '')) like 'auto_%'
+					)
+			)
+		`, userID, registrationIP).Scan(&relatedCheater); err != nil {
+			return CheatingBanSummary{}, err
+		}
+		if relatedCheater {
+			if _, err := tx.Exec(ctx, `
+				insert into ip_signup_bans(ip_address, reason, created_by, created_at, revoked_at)
+				values($1, $2, nullif($3, ''), now(), null)
+				on conflict (ip_address) do update set
+					reason = excluded.reason,
+					created_by = excluded.created_by,
+					created_at = now(),
+					revoked_at = null
+			`, registrationIP, "Automatic signup ban: repeated cheating bans from registration IP", actorUserID); err != nil {
+				return CheatingBanSummary{}, err
+			}
+			summary.IPSignupBanned = true
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return CheatingBanSummary{}, err
+	}
+	return summary, nil
+}
+
+func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUserID, reason string, since time.Time) (EloRefundSummary, error) {
+	var sinceArg any
+	if !since.IsZero() {
+		sinceArg = since
+	}
 	rows, err := tx.Query(ctx, `
 		with candidate_matches as (
 			select
 				h.match_id,
+				h.ended_at,
 				h.winner_user_id,
 				h.snapshot_json,
-				opponent.user_id as opponent_user_id
+				opponent.user_id as opponent_user_id,
+				cheater.mmr as cheater_mmr,
+				coalesce(cheater.rating_rd, $3) as cheater_rd
 			from match_history h
 			join match_players cheater on cheater.match_id = h.match_id and cheater.user_id = $1
 			join match_players opponent on opponent.match_id = h.match_id and opponent.user_id <> $1
@@ -2885,36 +3241,39 @@ func (s *pgStore) IssueEloRefundsForCheater(userID string, lookback time.Duratio
 				or l.started_match_id = h.match_id
 				or l.last_match_id = h.match_id
 			where h.mode = $2
-				and h.ended_at >= $3
+				and h.winner_user_id = $1
+				and ($4::timestamptz is null or h.ended_at >= $4)
 				and coalesce((h.snapshot_json->>'unranked')::boolean, false) = false
 				and l.id is null
 		)
 		select
 			match_id,
 			opponent_user_id,
+			cheater_mmr,
+			cheater_rd,
 			case
-				when winner_user_id = opponent_user_id then (snapshot_json->'ratingPreview'->opponent_user_id->>'win')::int
 				when winner_user_id = $1 then (snapshot_json->'ratingPreview'->opponent_user_id->>'lose')::int
-				else (snapshot_json->'ratingPreview'->opponent_user_id->>'draw')::int
+				else 0
 			end as original_delta
 		from candidate_matches
 		where snapshot_json->'ratingPreview' ? opponent_user_id
-		order by match_id
-	`, userID, modeDuel, since)
+		order by ended_at asc, match_id asc
+	`, cheaterUserID, modeDuel, initialRatingRD, sinceArg)
 	if err != nil {
 		return EloRefundSummary{}, err
 	}
 	defer rows.Close()
-
 	type refundCandidate struct {
 		matchID       string
 		opponentID    string
+		cheaterMMR    int
+		cheaterRD     float64
 		originalDelta int
 	}
 	candidates := []refundCandidate{}
 	for rows.Next() {
 		var item refundCandidate
-		if err := rows.Scan(&item.matchID, &item.opponentID, &item.originalDelta); err != nil {
+		if err := rows.Scan(&item.matchID, &item.opponentID, &item.cheaterMMR, &item.cheaterRD, &item.originalDelta); err != nil {
 			return EloRefundSummary{}, err
 		}
 		if item.originalDelta < 0 {
@@ -2928,39 +3287,259 @@ func (s *pgStore) IssueEloRefundsForCheater(userID string, lookback time.Duratio
 
 	var summary EloRefundSummary
 	for _, item := range candidates {
-		refundDelta := -item.originalDelta
+		var current RatingState
+		if err := tx.QueryRow(ctx, `
+			select mmr, rd, updated_at
+			from ranks
+			where user_id = $1 and mode = $2 and season_id = $3
+			for update
+		`, item.opponentID, modeDuel, defaultSeasonID).Scan(&current.MMR, &current.RD, &current.UpdatedAt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return EloRefundSummary{}, err
+		}
+		now := time.Now()
+		victimWin, _ := CalculateDuelRatingUpdates(current, RatingState{MMR: item.cheaterMMR, RD: item.cheaterRD, UpdatedAt: now}, "p1", now)
+		refundDelta := victimWin.Delta
+		if refundDelta <= 0 {
+			continue
+		}
+		originalLoss := -item.originalDelta
+		if refundDelta > originalLoss {
+			refundDelta = originalLoss
+		}
+		before := current.MMR
+		after := clampRankedMMR(before + refundDelta)
+		refundDelta = after - before
+		if refundDelta <= 0 {
+			continue
+		}
 		tag, err := tx.Exec(ctx, `
-			insert into elo_refunds(user_id, match_id, cheater_user_id, original_delta, refund_delta, reason)
-			values($1, $2, $3, $4, $5, 'cheating_verdict')
+			insert into elo_refunds(
+				user_id, match_id, cheater_user_id, original_delta, refund_delta,
+				victim_mmr_before, victim_mmr_after, computed_refund_delta, reason, created_by_reason
+			)
+			values($1, $2, $3, $4, $5, $6, $7, $5, 'cheating_verdict', $8)
 			on conflict (user_id, match_id, cheater_user_id) do nothing
-		`, item.opponentID, item.matchID, userID, item.originalDelta, refundDelta)
+		`, item.opponentID, item.matchID, cheaterUserID, item.originalDelta, refundDelta, before, after, reason)
 		if err != nil {
 			return EloRefundSummary{}, err
 		}
 		if tag.RowsAffected() == 0 {
 			continue
 		}
-		updateTag, err := tx.Exec(ctx, `
+		var notificationID int64
+		payload := map[string]any{
+			"refundDelta":   refundDelta,
+			"matchId":       item.matchID,
+			"cheaterUserId": cheaterUserID,
+			"reason":        reason,
+			"mmrBefore":     before,
+			"mmrAfter":      after,
+		}
+		if err := upsertUserNotification(ctx, tx, item.opponentID, "mmr_refund", fmt.Sprintf("mmr_refund:%s:%s:%s", item.opponentID, item.matchID, cheaterUserID), payload, &notificationID); err != nil {
+			return EloRefundSummary{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			update elo_refunds
+			set notification_id = $4
+			where user_id = $1 and match_id = $2 and cheater_user_id = $3
+		`, item.opponentID, item.matchID, cheaterUserID, notificationID); err != nil {
+			return EloRefundSummary{}, err
+		}
+		if _, err := tx.Exec(ctx, `
 			update ranks
-			set mmr = mmr + $4,
+			set mmr = $4,
 				updated_at = now()
 			where user_id = $1
 				and mode = $2
 				and season_id = $3
-		`, item.opponentID, modeDuel, defaultSeasonID, refundDelta)
-		if err != nil {
+		`, item.opponentID, modeDuel, defaultSeasonID, after); err != nil {
 			return EloRefundSummary{}, err
-		}
-		if updateTag.RowsAffected() == 0 {
-			return EloRefundSummary{}, fmt.Errorf("rank row missing for refund user %s", item.opponentID)
 		}
 		summary.RefundsIssued++
 		summary.TotalRefunded += refundDelta
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return EloRefundSummary{}, err
-	}
 	return summary, nil
+}
+
+func upsertUserNotification(ctx context.Context, tx pgx.Tx, userID, notificationType, dedupeKey string, payload any, id *int64) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return tx.QueryRow(ctx, `
+		with inserted as (
+			insert into user_notifications(user_id, type, dedupe_key, payload_json)
+			values($1, $2, $3, $4::jsonb)
+			on conflict (dedupe_key) do update set payload_json = excluded.payload_json
+			returning id
+		)
+		select id from inserted
+	`, userID, notificationType, dedupeKey, string(body)).Scan(id)
+}
+
+func (s *pgStore) EvaluateAutoCheatBansForMatch(matchID string) error {
+	matchID = strings.TrimSpace(matchID)
+	if matchID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		select distinct user_id
+		from ranked_guess_events
+		where match_id = $1
+	`, matchID)
+	if err != nil {
+		return err
+	}
+	userIDs := []string{}
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			rows.Close()
+			return err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, userID := range userIDs {
+		reason, shouldBan, err := s.autoCheatBanReason(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if shouldBan {
+			if _, err := s.BanPlayerForCheating(userID, reason, ""); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *pgStore) autoCheatBanReason(ctx context.Context, userID string) (string, bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		select score, guess_ms, evidence
+		from ranked_guess_events
+		where user_id = $1
+		order by occurred_at desc, id desc
+		limit 20
+	`, userID)
+	if err != nil {
+		return "", false, err
+	}
+	defer rows.Close()
+	type ev struct {
+		score    int
+		guessMS  int64
+		evidence float64
+	}
+	events := []ev{}
+	for rows.Next() {
+		var item ev
+		if err := rows.Scan(&item.score, &item.guessMS, &item.evidence); err != nil {
+			return "", false, err
+		}
+		events = append(events, item)
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	if len(events) < 10 {
+		return "", false, nil
+	}
+	var evidence10, evidence20 float64
+	fast4950In10 := 0
+	fast4900In20 := 0
+	highEvidence20 := 0
+	for i, item := range events {
+		if i < 10 {
+			evidence10 += item.evidence
+			if item.score >= 4950 && item.guessMS <= 10000 {
+				fast4950In10++
+			}
+		}
+		evidence20 += item.evidence
+		if item.score >= 4900 && item.guessMS <= 10000 {
+			fast4900In20++
+		}
+		if item.evidence >= 8 {
+			highEvidence20++
+		}
+	}
+	switch {
+	case evidence10 >= 18:
+		return "auto_cheat_fast_guess_evidence_10", true, nil
+	case len(events) >= 20 && evidence20 >= 28:
+		return "auto_cheat_fast_guess_evidence_20", true, nil
+	case highEvidence20 >= 3:
+		return "auto_cheat_repeated_extreme_fast_guesses", true, nil
+	case fast4950In10 >= 5:
+		return "auto_cheat_fast_4950_5_of_10", true, nil
+	case len(events) >= 20 && fast4900In20 >= 19:
+		return "auto_cheat_fast_4900_19_of_20", true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+func (s *pgStore) ListUserNotifications(userID string, limit int) ([]UserNotification, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, errors.New("userID required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		select id, type, payload_json::text, created_at
+		from user_notifications
+		where user_id = $1
+			and read_at is null
+		order by created_at desc, id desc
+		limit $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserNotification{}
+	for rows.Next() {
+		var item UserNotification
+		var raw string
+		if err := rows.Scan(&item.ID, &item.Type, &raw, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Payload = json.RawMessage(raw)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *pgStore) MarkUserNotificationRead(userID string, notificationID int64) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || notificationID <= 0 {
+		return errors.New("userID and notificationID required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		update user_notifications
+		set read_at = coalesce(read_at, now())
+		where id = $1 and user_id = $2
+	`, notificationID, userID)
+	return err
 }
 
 func (s *pgStore) AddSignupIPBan(ipAddress, reason, createdBy string) error {

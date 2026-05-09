@@ -305,7 +305,8 @@ func (a *api) adminDebugTestReports(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) adminBanPlayer(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.moderatorIdentity(r); err != nil {
+	admin, err := a.moderatorIdentity(r)
+	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -316,17 +317,13 @@ func (a *api) adminBanPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.SetPlayerBan(strings.TrimSpace(mux.Vars(r)["id"]), req.Reason, true); err != nil {
+	summary, err := a.store.BanPlayerForCheating(strings.TrimSpace(mux.Vars(r)["id"]), req.Reason, admin.Sub)
+	if err != nil {
 		http.Error(w, "failed to ban player", http.StatusInternalServerError)
 		return
 	}
-	refunds, err := a.store.IssueEloRefundsForCheater(strings.TrimSpace(mux.Vars(r)["id"]), 24*time.Hour)
-	if err != nil {
-		http.Error(w, "failed to issue elo refunds", http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"refunds": refunds})
+	_ = json.NewEncoder(w).Encode(summary)
 }
 
 func (a *api) adminUnbanPlayer(w http.ResponseWriter, r *http.Request) {

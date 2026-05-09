@@ -19,8 +19,6 @@ type adminModerationTestStore struct {
 	bannedUserID     string
 	bannedReason     string
 	banned           bool
-	refundUserID     string
-	refundLookback   time.Duration
 	refundsRequested bool
 }
 
@@ -35,11 +33,12 @@ func (s *adminModerationTestStore) SetPlayerBan(userID, reason string, banned bo
 	return nil
 }
 
-func (s *adminModerationTestStore) IssueEloRefundsForCheater(userID string, lookback time.Duration) (persistence.EloRefundSummary, error) {
+func (s *adminModerationTestStore) BanPlayerForCheating(userID, reason, actorUserID string) (persistence.CheatingBanSummary, error) {
 	s.refundsRequested = true
-	s.refundUserID = userID
-	s.refundLookback = lookback
-	return persistence.EloRefundSummary{RefundsIssued: 2, TotalRefunded: 30}, nil
+	s.bannedUserID = userID
+	s.bannedReason = reason
+	s.banned = true
+	return persistence.CheatingBanSummary{UserID: userID, Reason: reason, Refunds: persistence.EloRefundSummary{RefundsIssued: 2, TotalRefunded: 30}}, nil
 }
 
 func TestModeratorCanBanPlayer(t *testing.T) {
@@ -76,8 +75,8 @@ func TestModeratorCanBanPlayer(t *testing.T) {
 	if store.bannedReason != "reported cheating" {
 		t.Fatalf("ban reason = %q", store.bannedReason)
 	}
-	if !store.refundsRequested || store.refundUserID != "user-2" || store.refundLookback != 24*time.Hour {
-		t.Fatalf("expected refunds for user-2 within 24h, got requested=%v userID=%q lookback=%s", store.refundsRequested, store.refundUserID, store.refundLookback)
+	if !store.refundsRequested {
+		t.Fatalf("expected cheating-ban refund flow to run")
 	}
 }
 

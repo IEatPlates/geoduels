@@ -139,6 +139,8 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/admin/bootstrap", a.adminBootstrap).Methods(http.MethodPost)
 	r.HandleFunc("/v1/me", a.me).Methods(http.MethodGet)
 	r.HandleFunc("/v1/me/nickname", a.updateNickname).Methods(http.MethodPatch)
+	r.HandleFunc("/v1/me/notifications", a.userNotifications).Methods(http.MethodGet)
+	r.HandleFunc("/v1/me/notifications/{id}/read", a.markUserNotificationRead).Methods(http.MethodPost)
 	r.HandleFunc("/v1/content/lobby-changelog", a.publicLobbyChangelog).Methods(http.MethodGet)
 	r.HandleFunc("/v1/lobbies", a.createLobby).Methods(http.MethodPost)
 	r.HandleFunc("/v1/lobbies/{code}", a.getLobby).Methods(http.MethodGet)

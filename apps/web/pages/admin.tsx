@@ -125,6 +125,9 @@ export default function AdminPage() {
   const [draftEyebrow, setDraftEyebrow] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
+  const [moderationCaseStatus, setModerationCaseStatus] = useState<
+    "" | "archived"
+  >("");
   const [selectedHistoryUserId, setSelectedHistoryUserId] = useState("");
   const [selectedHistoryName, setSelectedHistoryName] = useState("");
   const [caseActionReason, setCaseActionReason] = useState("");
@@ -191,9 +194,10 @@ export default function AdminPage() {
   });
 
   const moderationCasesQuery = useQuery({
-    queryKey: ["admin-moderation-cases", accessToken],
+    queryKey: ["admin-moderation-cases", moderationCaseStatus, accessToken],
     enabled: canViewReports && !!accessToken,
-    queryFn: async () => requestAdminModerationCases(config, accessToken),
+    queryFn: async () =>
+      requestAdminModerationCases(config, accessToken, moderationCaseStatus),
     staleTime: 5_000,
   });
 
@@ -401,7 +405,12 @@ export default function AdminPage() {
 
   const uploadMapMutation = useMutation({
     mutationFn: async (params: { file: File; mapKey: string }) =>
-      requestAdminUploadCurrentMap(config, accessToken, params.file, params.mapKey),
+      requestAdminUploadCurrentMap(
+        config,
+        accessToken,
+        params.file,
+        params.mapKey,
+      ),
     onSuccess: async (data: { revisionId?: string; rowCount?: number }) => {
       setMapStatus(
         `Uploaded revision ${data.revisionId || "unknown"} with ${data.rowCount || 0} rows.`,
@@ -498,17 +507,19 @@ export default function AdminPage() {
     setOpenPlayerMenuId("");
   };
 
-  const tabs = ([
-    { id: "players", label: "Players", detail: `${players.length} shown` },
-    {
-      id: "reports",
-      label: "Moderation",
-      detail: `${moderationCases.length} cases`,
-    },
-    { id: "content", label: "Content", detail: "Map & changelog" },
-    { id: "access", label: "Access", detail: "IP & maintenance" },
-    { id: "debug", label: "Debug", detail: "Tools" },
-  ] as Array<{ id: AdminTab; label: string; detail: string }>).filter(
+  const tabs = (
+    [
+      { id: "players", label: "Players", detail: `${players.length} shown` },
+      {
+        id: "reports",
+        label: "Moderation",
+        detail: `${moderationCases.length} cases`,
+      },
+      { id: "content", label: "Content", detail: "Map & changelog" },
+      { id: "access", label: "Access", detail: "IP & maintenance" },
+      { id: "debug", label: "Debug", detail: "Tools" },
+    ] as Array<{ id: AdminTab; label: string; detail: string }>
+  ).filter(
     (tab) => canManageAdmin || tab.id === "reports" || tab.id === "players",
   );
 
@@ -620,7 +631,10 @@ export default function AdminPage() {
                       disabled={!selectedFile || uploadMapMutation.isPending}
                       onClick={() => {
                         if (selectedFile) {
-                          void uploadMapMutation.mutateAsync({ file: selectedFile, mapKey: selectedMapKey });
+                          void uploadMapMutation.mutateAsync({
+                            file: selectedFile,
+                            mapKey: selectedMapKey,
+                          });
                         }
                       }}
                       className="mt-4 min-h-11 rounded-xl bg-[#2ad18f] px-4 py-2 text-sm font-bold text-[#08111b] transition disabled:cursor-not-allowed disabled:opacity-60"
@@ -980,19 +994,43 @@ export default function AdminPage() {
                     <div>
                       <h2 className="text-lg font-black">Moderation queue</h2>
                       <p className="mt-1 text-sm text-[#a9bfd4]">
-                        Cases group reports, evidence, status, and actions into
-                        one review workflow.
+                        Cases needing action are shown by default. Resolved
+                        cases live in the archive.
                       </p>
                     </div>
-                    {selectedCaseId !== null ? (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCaseId(null)}
-                        className="min-h-10 rounded-xl border border-white/10 bg-white/10 px-4 text-sm font-bold"
-                      >
-                        Clear selection
-                      </button>
-                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: "", label: "Needs action" },
+                        { value: "archived", label: "Archived" },
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          onClick={() => {
+                            setModerationCaseStatus(
+                              option.value as "" | "archived",
+                            );
+                            setSelectedCaseId(null);
+                          }}
+                          className={`min-h-10 rounded-xl border px-4 text-sm font-bold ${
+                            moderationCaseStatus === option.value
+                              ? "border-[#2ad18f]/30 bg-[#2ad18f]/15 text-[#b9f5da]"
+                              : "border-white/10 bg-white/10 text-white"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                      {selectedCaseId !== null ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCaseId(null)}
+                          className="min-h-10 rounded-xl border border-white/10 bg-white/10 px-4 text-sm font-bold"
+                        >
+                          Clear selection
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
                     <div className="space-y-3">
@@ -1057,26 +1095,24 @@ export default function AdminPage() {
                               </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
-                              {["reviewing", "watching"].map(
-                                (status) => (
-                                  <button
-                                    key={status}
-                                    type="button"
-                                    disabled={caseActionMutation.isPending}
-                                    onClick={() =>
-                                      void caseActionMutation.mutateAsync({
-                                        caseId: selectedCase.id,
-                                        actionType: "status",
-                                        status,
-                                        reason: caseActionReason,
-                                      })
-                                    }
-                                    className="min-h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-black uppercase text-white transition hover:bg-white/15 disabled:opacity-60"
-                                  >
-                                    {status}
-                                  </button>
-                                ),
-                              )}
+                              {["reviewing", "watching"].map((status) => (
+                                <button
+                                  key={status}
+                                  type="button"
+                                  disabled={caseActionMutation.isPending}
+                                  onClick={() =>
+                                    void caseActionMutation.mutateAsync({
+                                      caseId: selectedCase.id,
+                                      actionType: "status",
+                                      status,
+                                      reason: caseActionReason,
+                                    })
+                                  }
+                                  className="min-h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-black uppercase text-white transition hover:bg-white/15 disabled:opacity-60"
+                                >
+                                  {status}
+                                </button>
+                              ))}
                               <button
                                 type="button"
                                 disabled={caseActionMutation.isPending}
@@ -1100,8 +1136,7 @@ export default function AdminPage() {
                                     caseId: selectedCase.id,
                                     actionType: "mark_inconclusive",
                                     reason:
-                                      caseActionReason ||
-                                      "Not enough evidence",
+                                      caseActionReason || "Not enough evidence",
                                   })
                                 }
                                 className="min-h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-black uppercase text-white transition hover:bg-white/15 disabled:opacity-60"
@@ -1279,16 +1314,16 @@ export default function AdminPage() {
                               Evidence categories
                             </p>
                             <div className="mt-3 flex flex-wrap gap-2">
-                              {Object.entries(selectedCase.categories || {}).map(
-                                ([category, count]) => (
-                                  <span
-                                    key={category}
-                                    className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-bold text-[#dbe7ff]"
-                                  >
-                                    {category}: {count}
-                                  </span>
-                                ),
-                              )}
+                              {Object.entries(
+                                selectedCase.categories || {},
+                              ).map(([category, count]) => (
+                                <span
+                                  key={category}
+                                  className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-bold text-[#dbe7ff]"
+                                >
+                                  {category}: {count}
+                                </span>
+                              ))}
                             </div>
                           </div>
 
@@ -1444,9 +1479,7 @@ export default function AdminPage() {
                                   key={event.id}
                                   className="rounded-xl border border-white/10 bg-black/15 p-3 text-sm text-[#dbe7ff]"
                                 >
-                                  <p className="font-bold">
-                                    {event.eventType}
-                                  </p>
+                                  <p className="font-bold">{event.eventType}</p>
                                   {event.body ? (
                                     <p className="mt-1 text-[#a9bfd4]">
                                       {event.body}
@@ -1620,9 +1653,7 @@ export default function AdminPage() {
                           ) : null}
                           <th className="px-4 py-3 font-black">Status</th>
                           {canManageAdmin ? (
-                            <th className="px-4 py-3 font-black">
-                              Moderation
-                            </th>
+                            <th className="px-4 py-3 font-black">Moderation</th>
                           ) : null}
                           <th className="px-4 py-3 text-right font-black">
                             Actions

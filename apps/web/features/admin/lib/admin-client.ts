@@ -129,8 +129,10 @@ export async function requestAdminDemoteModerator(
 export async function requestAdminModerationCases(
   config: RuntimeConfig,
   accessToken: string,
+  status = "",
 ) {
-  const resp = await fetch(`${config.apiURL}/v1/admin/moderation/cases`, {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  const resp = await fetch(`${config.apiURL}/v1/admin/moderation/cases${qs}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
@@ -301,7 +303,9 @@ export async function requestAdminModerationSettings(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
-    throw new Error(await readError(resp, "Failed to load moderation settings"));
+    throw new Error(
+      await readError(resp, "Failed to load moderation settings"),
+    );
   }
   return resp.json() as Promise<AdminModerationSettings>;
 }
@@ -320,7 +324,9 @@ export async function requestAdminPutModerationSettings(
     body: JSON.stringify(settings),
   });
   if (!resp.ok) {
-    throw new Error(await readError(resp, "Failed to save moderation settings"));
+    throw new Error(
+      await readError(resp, "Failed to save moderation settings"),
+    );
   }
   return resp.json() as Promise<AdminModerationSettings>;
 }
@@ -396,11 +402,14 @@ export async function requestAdminUploadCurrentMap(
 ) {
   const body = new FormData();
   body.append("file", file);
-  const resp = await fetch(`${config.apiURL}/v1/admin/maps/${encodeURIComponent(mapKey)}/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
-    body,
-  });
+  const resp = await fetch(
+    `${config.apiURL}/v1/admin/maps/${encodeURIComponent(mapKey)}/upload`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body,
+    },
+  );
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to upload map"));
   }

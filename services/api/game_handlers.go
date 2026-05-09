@@ -57,6 +57,39 @@ func (a *api) me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *api) userNotifications(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	notifications, err := a.store.ListUserNotifications(claims.Sub, 10)
+	if err != nil {
+		http.Error(w, "notifications unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"notifications": notifications})
+}
+
+func (a *api) markUserNotificationRead(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	notificationID, err := strconv.ParseInt(strings.TrimSpace(mux.Vars(r)["id"]), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid notification id", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.MarkUserNotificationRead(claims.Sub, notificationID); err != nil {
+		http.Error(w, "failed to mark notification", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
 	season := strings.TrimSpace(r.URL.Query().Get("season"))

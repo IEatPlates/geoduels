@@ -76,6 +76,10 @@ func (s *recoverTestStore) SetPlayerBan(userID, reason string, banned bool) erro
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) BanPlayerForCheating(userID, reason, actorUserID string) (persistence.CheatingBanSummary, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) ClearReporterMute(userID string) error {
 	panic("unexpected call")
 }
@@ -180,6 +184,14 @@ func (s *recoverTestStore) AddModerationCaseAction(params persistence.Moderation
 }
 
 func (s *recoverTestStore) IssueEloRefundsForCheater(userID string, lookback time.Duration) (persistence.EloRefundSummary, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) ListUserNotifications(userID string, limit int) ([]persistence.UserNotification, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) MarkUserNotificationRead(userID string, notificationID int64) error {
 	panic("unexpected call")
 }
 

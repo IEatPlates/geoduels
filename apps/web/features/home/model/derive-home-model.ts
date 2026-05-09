@@ -65,7 +65,11 @@ function getSelfQueueName(params: {
   return direct;
 }
 
-function avatarFallback(value: string, fallback: string, noLinkedAccount = false) {
+function avatarFallback(
+  value: string,
+  fallback: string,
+  noLinkedAccount = false,
+) {
   if (noLinkedAccount) return "?";
   return (value || fallback).slice(0, 1).toUpperCase();
 }
@@ -169,7 +173,8 @@ export function deriveHomeModel({
   const matchConfig = snapshot?.config || {};
   const ruleset = matchConfig.ruleset === "nmpz" ? "nmpz" : "moving";
   const roundTimeLimitMs =
-    matchConfig.roundTimerMode === "fixed" && typeof matchConfig.roundTimeLimitMs === "number"
+    matchConfig.roundTimerMode === "fixed" &&
+    typeof matchConfig.roundTimeLimitMs === "number"
       ? matchConfig.roundTimeLimitMs
       : config.roundDurationMs;
   const streetViewSrc = buildStreetViewSrc(snapshot, config.googleEmbedKey);
@@ -193,7 +198,8 @@ export function deriveHomeModel({
   const opponentDisconnected = !!oppPlayer?.disconnected;
   const selfAvatarUrl = selfPlayer?.avatarUrl || auth.userAvatar;
   const oppAvatarUrl = oppPlayer?.avatarUrl || "";
-  const selfHasNoLinkedAccount = !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
+  const selfHasNoLinkedAccount =
+    !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
   const selfFallback = avatarFallback(
     selfName || auth.userEmail,
     "Y",
@@ -257,10 +263,7 @@ export function deriveHomeModel({
     game.roundMSLeft < 5_000;
   const timerProgressPct =
     isRoundTimerRunning && !isSingleplayer && snapshot?.phase === "live"
-      ? Math.max(
-          0,
-          Math.min(100, (game.roundMSLeft / roundTimeLimitMs) * 100),
-        )
+      ? Math.max(0, Math.min(100, (game.roundMSLeft / roundTimeLimitMs) * 100))
       : 100;
   const matchOutcome: "win" | "lose" | "draw" =
     selfHP === oppHP ? "draw" : selfHP > oppHP ? "win" : "lose";
@@ -423,7 +426,11 @@ export function deriveHomeModel({
       guessSubmitted: game.guessSubmitted,
       opponentGuessAlert: isSingleplayer ? false : game.opponentGuessAlert,
       connectionIssue: match.connectionIssue,
-      modeName: isSingleplayer ? "Practice" : ruleset === "nmpz" ? "NMPZ" : "Moving",
+      modeName: isSingleplayer
+        ? "Practice"
+        : ruleset === "nmpz"
+          ? "NMPZ"
+          : "Moving",
       mapName: ruleset === "nmpz" ? "A Location World" : "A Source World",
       streetViewInteractive: ruleset !== "nmpz",
       chatMessages: match.chatMessages,
@@ -431,6 +438,7 @@ export function deriveHomeModel({
     },
     overlays: {
       onboardingOpen: auth.onboardingRequired && !!auth.userId,
+      notifications: [],
       endMatch:
         uiPhase === "match_end" && game.showMatchEndPage
           ? {
@@ -442,9 +450,7 @@ export function deriveHomeModel({
               opponentUserId: isSingleplayer ? undefined : oppId,
               selfElo: isSingleplayer ? undefined : selfElo,
               opponentElo: isSingleplayer ? undefined : opponentElo,
-              selfEloDelta: selfReceivesEloDelta
-                ? selfEloDelta
-                : undefined,
+              selfEloDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
               opponentEloDelta: opponentReceivesEloDelta
                 ? opponentEloDelta
                 : undefined,

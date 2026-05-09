@@ -46,6 +46,46 @@ export async function requestMe(config: RuntimeConfig, accessToken: string) {
   return resp;
 }
 
+export type UserNotification = {
+  id: number;
+  type: string;
+  payload: {
+    refundDelta?: number;
+    matchId?: string;
+    cheaterUserId?: string;
+    mmrBefore?: number;
+    mmrAfter?: number;
+  };
+  createdAt: string;
+};
+
+export async function requestUserNotifications(
+  config: RuntimeConfig,
+  accessToken: string,
+): Promise<{ notifications: UserNotification[] }> {
+  const resp = await fetch(`${config.apiURL}/v1/me/notifications`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    return { notifications: [] };
+  }
+  return resp.json();
+}
+
+export async function markUserNotificationRead(
+  config: RuntimeConfig,
+  accessToken: string,
+  notificationId: number,
+) {
+  await fetch(
+    `${config.apiURL}/v1/me/notifications/${encodeURIComponent(notificationId)}/read`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  );
+}
+
 export async function requestLeaderboard(
   config: RuntimeConfig,
   accessToken?: string,

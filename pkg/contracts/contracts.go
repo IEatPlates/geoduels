@@ -533,20 +533,23 @@ type AdminPlayerSummary struct {
 }
 
 type ModerationCaseSummary struct {
-	ID                  int64          `json:"id"`
-	TargetUserID        string         `json:"targetUserId"`
-	TargetDisplayName   string         `json:"targetDisplayName"`
-	Status              string         `json:"status"`
-	Priority            string         `json:"priority"`
-	Score               float64        `json:"score"`
-	ReportCount         int            `json:"reportCount"`
-	UniqueReporterCount int            `json:"uniqueReporterCount"`
-	Categories          map[string]int `json:"categories"`
-	Summary             string         `json:"summary,omitempty"`
-	AssignedTo          string         `json:"assignedTo,omitempty"`
-	LatestActivityAt    time.Time      `json:"latestActivityAt"`
-	CreatedAt           time.Time      `json:"createdAt"`
-	NotificationSentAt  time.Time      `json:"notificationSentAt,omitempty"`
+	ID                   int64          `json:"id"`
+	TargetUserID         string         `json:"targetUserId"`
+	TargetDisplayName    string         `json:"targetDisplayName"`
+	Status               string         `json:"status"`
+	Priority             string         `json:"priority"`
+	Score                float64        `json:"score"`
+	ReporterScore        float64        `json:"reporterScore,omitempty"`
+	RecentReportPressure float64        `json:"recentReportPressure,omitempty"`
+	GameplayEvidence     float64        `json:"gameplayEvidence,omitempty"`
+	ReportCount          int            `json:"reportCount"`
+	UniqueReporterCount  int            `json:"uniqueReporterCount"`
+	Categories           map[string]int `json:"categories"`
+	Summary              string         `json:"summary,omitempty"`
+	AssignedTo           string         `json:"assignedTo,omitempty"`
+	LatestActivityAt     time.Time      `json:"latestActivityAt"`
+	CreatedAt            time.Time      `json:"createdAt"`
+	NotificationSentAt   time.Time      `json:"notificationSentAt,omitempty"`
 }
 
 type ModerationReportSummary struct {
@@ -596,15 +599,18 @@ type ModerationReportCreated struct {
 }
 
 type ModerationCaseNotificationPayload struct {
-	CaseID              int64          `json:"caseId"`
-	TargetUserID        string         `json:"targetUserId"`
-	TargetDisplayName   string         `json:"targetDisplayName"`
-	Priority            string         `json:"priority"`
-	Score               float64        `json:"score"`
-	ReportCount         int            `json:"reportCount"`
-	UniqueReporterCount int            `json:"uniqueReporterCount"`
-	Categories          map[string]int `json:"categories"`
-	LatestActivityAt    time.Time      `json:"latestActivityAt"`
+	CaseID               int64          `json:"caseId"`
+	TargetUserID         string         `json:"targetUserId"`
+	TargetDisplayName    string         `json:"targetDisplayName"`
+	Priority             string         `json:"priority"`
+	Score                float64        `json:"score"`
+	ReporterScore        float64        `json:"reporterScore,omitempty"`
+	RecentReportPressure float64        `json:"recentReportPressure,omitempty"`
+	GameplayEvidence     float64        `json:"gameplayEvidence,omitempty"`
+	ReportCount          int            `json:"reportCount"`
+	UniqueReporterCount  int            `json:"uniqueReporterCount"`
+	Categories           map[string]int `json:"categories"`
+	LatestActivityAt     time.Time      `json:"latestActivityAt"`
 }
 
 type MapRevisionSummary struct {

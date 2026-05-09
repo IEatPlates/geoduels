@@ -8,9 +8,12 @@ import {
   requestGuestSession,
   requestLogout,
   requestMatchReport,
+  requestUserNotifications,
   requestSession,
   requestRefreshSession,
   requestUpdateNickname,
+  markUserNotificationRead,
+  type UserNotification,
 } from "../../auth/lib/auth-client";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import {
@@ -103,6 +106,7 @@ export function useHomeModel(options?: {
   const [pendingLobbyCode, setPendingLobbyCode] = useState("");
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [lobbyError, setLobbyError] = useState("");
+  const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const lobbyStreamAbortRef = useRef<AbortController | null>(null);
   const handledLobbyMatchRef = useRef("");
 
@@ -565,6 +569,23 @@ export function useHomeModel(options?: {
     }
   }, [match.snapshot, auth.userId, sessionController]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!auth.userId || !auth.accessToken || auth.onboardingRequired) {
+      setNotifications([]);
+      return;
+    }
+    void (async () => {
+      const result = await requestUserNotifications(config, auth.accessToken);
+      if (!cancelled) {
+        setNotifications(result.notifications || []);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.userId, auth.accessToken, auth.onboardingRequired]);
+
   const baseView = deriveHomeModel({
     auth,
     match: {
@@ -589,6 +610,10 @@ export function useHomeModel(options?: {
   );
   const view = {
     ...baseView,
+    overlays: {
+      ...baseView.overlays,
+      notifications,
+    },
     lobby: {
       ...baseView.lobby,
       privateLobby: {
@@ -990,6 +1015,14 @@ export function useHomeModel(options?: {
     );
   };
 
+  const dismissNotification = async (notificationId: number) => {
+    setNotifications((current) =>
+      current.filter((notification) => notification.id !== notificationId),
+    );
+    if (!auth.accessToken) return;
+    await markUserNotificationRead(config, auth.accessToken, notificationId);
+  };
+
   return {
     view,
     actions: {
@@ -1018,6 +1051,7 @@ export function useHomeModel(options?: {
       submitOnboardingNickname,
       submitProfileNickname,
       setNicknameInput: sessionController.setNicknameInputAndClearError,
+      dismissNotification,
     },
   };
 }

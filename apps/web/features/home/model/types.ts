@@ -1,7 +1,11 @@
 import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
+import type { UserNotification } from "../../auth/lib/auth-client";
 import type { LobbySnapshot } from "../../lobby/lib/lobby-client";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
-import type { GameRuleset, MatchConfig } from "../../matchmaking/lib/queue-client";
+import type {
+  GameRuleset,
+  MatchConfig,
+} from "../../matchmaking/lib/queue-client";
 import type {
   ChatEmote,
   ChatMessage,
@@ -117,6 +121,7 @@ export type HomeGameView = {
 
 export type HomeOverlaysView = {
   onboardingOpen: boolean;
+  notifications: UserNotification[];
   endMatch:
     | {
         open: true;
@@ -189,6 +194,7 @@ export type HomeActions = {
   submitOnboardingNickname: () => Promise<void>;
   submitProfileNickname: () => Promise<boolean>;
   setNicknameInput: (value: string) => void;
+  dismissNotification: (notificationId: number) => Promise<void>;
 };
 
 export type HomeModel = {
