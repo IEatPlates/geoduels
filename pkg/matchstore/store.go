@@ -121,7 +121,7 @@ const (
 	baseMatchWindowMMR = 150
 	matchExpandEveryMS = int64(2 * 1000)
 	matchExpandStepMMR = 75
-	maxMatchWindowMMR  = 1000
+	maxMatchWindowMMR  = 500
 	mutualMatchWaitMS  = int64(1 * 1000)
 	queueTicketTTL     = 30 * time.Second
 	matcherLockTTL     = 2 * time.Second

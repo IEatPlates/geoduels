@@ -36,7 +36,19 @@ func (s *recoverTestStore) UpsertGoogleIdentity(googleSub, email, googleName, av
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) GoogleIdentityExists(googleSub string) (bool, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) ProviderIdentityExists(provider, providerUserID string) (bool, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (persistence.Identity, error) {
 	panic("unexpected call")
 }
 

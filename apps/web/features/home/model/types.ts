@@ -22,6 +22,10 @@ export type HomeAuthView = {
   displayName: string;
   userAvatar: string;
   onboardingRequired: boolean;
+  authMigrationRequired?: boolean;
+  migrationAvailable?: boolean;
+  linkedProviders?: string[];
+  canPlay?: boolean;
   isAdmin: boolean;
   isModerator?: boolean;
   isGuest: boolean;
@@ -32,6 +36,8 @@ export type HomeAuthView = {
   authError: string;
   googleSignInEnabled: boolean;
   googleClientId: string;
+  discordSignInEnabled?: boolean;
+  discordClientId?: string;
 };
 
 export type HomeLobbyView = {
@@ -189,6 +195,7 @@ export type HomeActions = {
   ) => Promise<void>;
   devLogin: () => Promise<unknown>;
   triggerGoogleSignIn: () => Promise<void>;
+  triggerDiscordSignIn?: () => Promise<void>;
   loadLeaderboard: () => void;
   clearAuthSession: (message?: string) => void;
   submitOnboardingNickname: () => Promise<void>;

@@ -18,9 +18,9 @@ const sections = [
   {
     title: "3. Accounts and Security",
     body: [
-      "GeoDuels may support Google sign-in and guest access. You are responsible for activity under your account and for keeping access to your Google account, devices, and sessions secure.",
+      "GeoDuels may support Discord sign-in, guest access, and migration-only Google account recovery. You are responsible for activity under your account and for keeping access to your Discord account, any migration Google account, devices, and sessions secure.",
       "You may not share, sell, transfer, or misuse accounts. GeoDuels may restrict, suspend, or terminate accounts used for abuse, cheating, fraud, security risks, or violations of these Terms.",
-      "You may request deletion of your account by contacting me@sourceloc.net. In-app account deletion is not currently available.",
+      "You may request deletion of your account by contacting me@sourceloc.net. During Discord migration, in-app deletion may be available for replacing a current Discord-only account with an older migrated account.",
     ],
   },
   {
@@ -72,7 +72,7 @@ const sections = [
   {
     title: "10. Third-Party Services and Ads",
     body: [
-      "GeoDuels may use third-party services including Google sign-in, Google Maps or Street View-related services, Google AdSense or other advertising providers, hosting providers, infrastructure providers, and notification tools such as Discord webhooks.",
+      "GeoDuels may use third-party services including Discord sign-in, migration-only Google OAuth, Google Maps or Street View-related services, Google AdSense or other advertising providers, hosting providers, infrastructure providers, and notification tools such as Discord webhooks.",
       "Third-party services may have their own terms and privacy policies. GeoDuels is not responsible for third-party services or their practices.",
       "GeoDuels may display advertising. Ads may be provided by third-party advertising services and may be subject to separate policies and controls.",
     ],
@@ -151,7 +151,7 @@ export default function TermsPage() {
             Terms of Service
           </h1>
           <p className="mt-3 text-sm text-[#a9bfd4]">
-            Last updated: May 5, 2026
+            Last updated: May 10, 2026
           </p>
           <p className="mt-5 max-w-3xl text-base leading-7 text-[#c5d4e2]">
             These Terms explain the rules for using GeoDuels and help protect

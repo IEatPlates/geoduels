@@ -45,7 +45,7 @@ var googleOAuthPopupTemplate = template.Must(template.New("google-oauth-popup").
     (function () {
       var payload = {{.Payload}};
       var targetOrigin = {{.TargetOrigin}};
-      var message = { type: 'geoduels:google-auth', payload: payload };
+      var message = { type: 'geoduels:auth', payload: payload };
       var statusEl = document.getElementById('status');
       var detailEl = document.getElementById('detail');
       var closeButton = document.getElementById('close');
@@ -65,11 +65,21 @@ var googleOAuthPopupTemplate = template.Must(template.New("google-oauth-popup").
           } catch (_error) {}
         }
         if (payload && payload.ok) {
-          nextURL.searchParams.set('googleAuth', 'success');
+          nextURL.searchParams.set('auth', 'success');
+          if (payload && payload.provider) {
+            nextURL.searchParams.set('provider', String(payload.provider));
+          }
+          nextURL.searchParams.delete('authError');
+          nextURL.searchParams.delete('googleAuth');
           nextURL.searchParams.delete('googleAuthError');
         } else {
-          nextURL.searchParams.set('googleAuth', 'error');
-          nextURL.searchParams.set('googleAuthError', payload && payload.error ? String(payload.error) : 'Login failed');
+          nextURL.searchParams.set('auth', 'error');
+          if (payload && payload.provider) {
+            nextURL.searchParams.set('provider', String(payload.provider));
+          }
+          nextURL.searchParams.set('authError', payload && payload.error ? String(payload.error) : 'Login failed');
+          nextURL.searchParams.delete('googleAuth');
+          nextURL.searchParams.delete('googleAuthError');
         }
         window.location.replace(nextURL.toString());
         return;
@@ -122,12 +132,12 @@ func (a *api) googleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-	if claims, err := a.authenticatedClaims(r); err == nil {
-		currentIdentity, lookupErr := a.store.GetIdentity(claims.Sub)
-		if lookupErr == nil && currentIdentity.AccountType == "guest" {
-			state.LinkSub = currentIdentity.Sub
-		}
+	claims, authErr := a.authenticatedClaims(r)
+	if authErr != nil {
+		http.Error(w, "google is migration-only", http.StatusUnauthorized)
+		return
 	}
+	state.LinkSub = claims.Sub
 	stateToken := jwt.NewWithClaims(jwt.SigningMethodHS256, state)
 	signedState, err := stateToken.SignedString(a.appAuthSecret)
 	if err != nil {
@@ -150,7 +160,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "google sign-in unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	payload := map[string]any{"ok": false, "error": "Sign-in failed"}
+	payload := map[string]any{"ok": false, "error": "Sign-in failed", "provider": "google"}
 	targetOrigin := ""
 	defer func() {
 		renderGoogleOAuthPopup(w, targetOrigin, payload)
@@ -192,24 +202,10 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = email
 	}
-	googleIdentityExists, err := a.store.GoogleIdentityExists(idClaims.Sub)
+	identity, err := a.store.MigrateGoogleIdentityToCurrentDiscord(state.LinkSub, idClaims.Sub, true)
 	if err != nil {
-		payload["error"] = "identity lookup failed"
-		return
-	}
-	if !googleIdentityExists && state.LinkSub == "" {
-		if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
-			payload["error"] = "signup unavailable"
-			return
-		} else if banned {
-			payload["error"] = "signup unavailable"
-			return
-		}
-	}
-	identity, err := a.store.UpsertGoogleIdentity(idClaims.Sub, email, displayName, idClaims.Picture, state.LinkSub)
-	if err != nil {
-		log.Printf("google oauth callback: persist identity failed: %v", err)
-		payload["error"] = "persist identity failed"
+		log.Printf("google oauth callback: migration failed: %v", err)
+		payload["error"] = "migration failed"
 		return
 	}
 	suggestedNick := identity.GoogleName
@@ -218,19 +214,25 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	refreshToken, sessionRecord, err := a.createSession(identity.Sub, r)
 	if err != nil {
+		log.Printf("google oauth callback: create session failed for user %s: %v", identity.Sub, err)
 		payload["error"] = "issue session failed"
 		return
 	}
 	accessToken, err := auth.IssueAppAccessToken(a.appAuthSecret, identity.Sub, sessionRecord.ID, a.accessTokenTTL)
 	if err != nil {
+		log.Printf("google oauth callback: issue access token failed for user %s session %s: %v", identity.Sub, sessionRecord.ID, err)
 		payload["error"] = "issue session failed"
 		return
 	}
 	a.setRefreshCookie(w, r, refreshToken)
 	payload = map[string]any{
 		"ok":                 true,
+		"provider":           "google",
 		"accessToken":        accessToken,
 		"onboardingRequired": !identity.Onboarded,
+		"linkedProviders":    identity.LinkedProviders,
+		"migrationAvailable": identity.MigrationAvailable,
+		"canPlay":            identity.Onboarded && !identity.AuthMigrationRequired,
 		"suggestedNickname":  suggestedNick,
 		"returnTo":           state.ReturnTo,
 		"user": map[string]any{

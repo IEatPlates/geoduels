@@ -11,7 +11,7 @@ const sections = [
   {
     title: "2. Information We Collect",
     body: [
-      "Account information. If you sign in with Google, we receive information needed to create and maintain your account, such as your Google account identifier, email address, display name, and avatar URL. GeoDuels may also create guest accounts with generated identifiers and display names.",
+      "Account information. If you sign in with Discord, we receive information needed to create and maintain your account, such as your Discord account identifier, email address when available, display name, and avatar URL. During account migration, Google OAuth may be used only to prove ownership of an older GeoDuels account. GeoDuels may also create guest accounts with generated identifiers and display names.",
       "Profile and ranking information. We store your display name, avatar, MMR, rating data, games played, wins, ranked statistics, account status, moderator/admin flags, bans, and related account history.",
       "Authentication and session information. We store session records, secure refresh-session information, IP addresses, user agents, timestamps, and related security data used to keep accounts signed in and protect the service.",
       "Gameplay information. We store match IDs, players in a match, guesses, coordinates, round timing, scores, HP, match snapshots, match results, reconnect/session state, lobby data, invite codes, and match history.",
@@ -37,7 +37,7 @@ const sections = [
   {
     title: "5. Third-Party Services",
     body: [
-      "GeoDuels uses Google services for sign-in and Google Maps/Street View-related gameplay. If advertising is enabled, GeoDuels may use Google AdSense or related advertising services.",
+      "GeoDuels uses Discord for sign-in and Google Maps/Street View-related gameplay. During migration, Google OAuth may be used to connect older accounts. If advertising is enabled, GeoDuels may use Google AdSense or related advertising services.",
       "GeoDuels may use infrastructure providers for hosting, databases, caching, networking, logs, and service operations. Moderation alerts may be sent to configured Discord webhooks or similar notification tools.",
       "Third-party services process information under their own terms and privacy policies. GeoDuels is not responsible for third-party privacy practices.",
     ],
@@ -60,13 +60,13 @@ const sections = [
     title: "8. Security",
     body: [
       "GeoDuels uses technical and organizational measures intended to protect information, including secure session design, limited access to administrative tools, and operational safeguards. No online service can guarantee perfect security.",
-      "You are responsible for keeping access to your Google account and devices secure.",
+      "You are responsible for keeping access to your Discord account, any migration Google account, and devices secure.",
     ],
   },
   {
     title: "9. Your Choices and Rights",
     body: [
-      "You may request deletion of your GeoDuels account by emailing me@sourceloc.net from an address that can reasonably identify your account. In-app account deletion is not currently available.",
+      "You may request deletion of your GeoDuels account by emailing me@sourceloc.net from an address that can reasonably identify your account. During Discord migration, GeoDuels may offer an in-app option to delete the current Discord-only account data before migrating an older Google-backed account.",
       "Depending on where you live, you may have rights to access, delete, correct, or object to certain processing of your personal information. Contact me@sourceloc.net to make a request. GeoDuels may need to retain certain information where required or reasonably necessary for safety, fraud prevention, moderation, legal, or operational reasons.",
     ],
   },
@@ -116,7 +116,7 @@ export default function PrivacyPage() {
             Privacy Policy
           </h1>
           <p className="mt-3 text-sm text-[#a9bfd4]">
-            Last updated: May 5, 2026
+            Last updated: May 10, 2026
           </p>
           <p className="mt-5 max-w-3xl text-base leading-7 text-[#c5d4e2]">
             This policy describes how GeoDuels handles information when you use

@@ -55,10 +55,10 @@ func TestChooseGoogleIdentityUser(t *testing.T) {
 			wantLinkedGuest: true,
 		},
 		{
-			name:            "registered link is not migrated",
+			name:            "registered link is linked explicitly",
 			linkUserID:      "registered-link-user",
 			linkAccountType: "registered",
-			wantGenerated:   true,
+			wantUserID:      "registered-link-user",
 		},
 		{
 			name:          "new google user gets generated id",
@@ -79,5 +79,12 @@ func TestChooseGoogleIdentityUser(t *testing.T) {
 				t.Fatalf("linked guest = %v, want %v", gotLinkedGuest, tt.wantLinkedGuest)
 			}
 		})
+	}
+}
+
+func TestChooseProviderIdentityUserDoesNotUseEmailForDiscord(t *testing.T) {
+	gotUserID, _ := chooseProviderIdentityUser("", "google-user", "registered", "", "")
+	if gotUserID != "google-user" {
+		t.Fatalf("generic chooser should still honor explicit email candidate, got %q", gotUserID)
 	}
 }

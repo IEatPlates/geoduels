@@ -301,10 +301,14 @@ func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID s
 		return contracts.AuthSessionPayload{}, err
 	}
 	payload := contracts.AuthSessionPayload{
-		AccessToken:        accessToken,
-		OnboardingRequired: !identity.Onboarded,
-		SuggestedNickname:  defaultStr(identity.GoogleName, identity.DisplayName),
-		User:               sessionUser(identity),
+		AccessToken:           accessToken,
+		OnboardingRequired:    !identity.Onboarded,
+		SuggestedNickname:     defaultStr(identity.ProviderName, defaultStr(identity.GoogleName, identity.DisplayName)),
+		LinkedProviders:       identity.LinkedProviders,
+		AuthMigrationRequired: identity.AuthMigrationRequired,
+		MigrationAvailable:    identity.MigrationAvailable,
+		CanPlay:               identity.Onboarded && !identity.AuthMigrationRequired,
+		User:                  sessionUser(identity),
 	}
 	return payload, nil
 }

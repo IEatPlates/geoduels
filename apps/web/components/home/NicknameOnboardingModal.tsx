@@ -3,8 +3,11 @@ type NicknameOnboardingModalProps = {
   nicknameInput: string;
   nicknameError: string;
   nicknameSaving: boolean;
+  canMigrateGoogle?: boolean;
+  migrationSaving?: boolean;
   onChangeNickname: (value: string) => void;
   onSubmit: () => void;
+  onMigrateGoogle?: () => void;
 };
 
 export default function NicknameOnboardingModal({
@@ -12,8 +15,11 @@ export default function NicknameOnboardingModal({
   nicknameInput,
   nicknameError,
   nicknameSaving,
+  canMigrateGoogle = false,
+  migrationSaving = false,
   onChangeNickname,
-  onSubmit
+  onSubmit,
+  onMigrateGoogle
 }: NicknameOnboardingModalProps) {
   if (!open) return null;
   return (
@@ -43,6 +49,16 @@ export default function NicknameOnboardingModal({
           >
             {nicknameSaving ? 'Saving...' : 'Continue'}
           </button>
+          {canMigrateGoogle && onMigrateGoogle ? (
+            <button
+              type="button"
+              onClick={onMigrateGoogle}
+              disabled={nicknameSaving || migrationSaving}
+              className="w-full rounded-[16px] border border-white/10 bg-white/5 px-4 py-3 text-[12px] font-extrabold uppercase tracking-[0.1em] text-[#d7e6f5] transition hover:bg-white/10 disabled:opacity-50"
+            >
+              {migrationSaving ? 'Opening Google...' : 'Migrate old Google account'}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

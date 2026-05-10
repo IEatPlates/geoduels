@@ -426,10 +426,14 @@ type LeaderboardSummary struct {
 }
 
 type AuthSessionPayload struct {
-	AccessToken        string   `json:"accessToken"`
-	OnboardingRequired bool     `json:"onboardingRequired"`
-	SuggestedNickname  string   `json:"suggestedNickname,omitempty"`
-	User               AuthUser `json:"user"`
+	AccessToken           string   `json:"accessToken"`
+	OnboardingRequired    bool     `json:"onboardingRequired"`
+	SuggestedNickname     string   `json:"suggestedNickname,omitempty"`
+	LinkedProviders       []string `json:"linkedProviders,omitempty"`
+	AuthMigrationRequired bool     `json:"authMigrationRequired,omitempty"`
+	MigrationAvailable    bool     `json:"migrationAvailable,omitempty"`
+	CanPlay               bool     `json:"canPlay"`
+	User                  AuthUser `json:"user"`
 }
 
 type MatchBootstrapResponse struct {

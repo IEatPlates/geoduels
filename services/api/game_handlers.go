@@ -455,6 +455,10 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "onboarding incomplete", http.StatusForbidden)
 		return
 	}
+	if identity.AuthMigrationRequired {
+		http.Error(w, "connect discord to continue", http.StatusForbidden)
+		return
+	}
 	userID := claims.Sub
 	if assigned, ok, err := a.coord.GetAssignmentByUser(r.Context(), userID); err == nil && ok {
 		mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)

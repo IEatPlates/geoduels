@@ -23,6 +23,10 @@ type AuthPopupPayload = {
   error?: string;
   accessToken?: string;
   onboardingRequired?: boolean;
+  authMigrationRequired?: boolean;
+  migrationAvailable?: boolean;
+  linkedProviders?: string[];
+  canPlay?: boolean;
   suggestedNickname?: string;
   user?: SessionUser;
 };
@@ -53,6 +57,10 @@ type SessionPatch = Partial<
     | "authError"
     | "nicknameError"
     | "nicknameSaving"
+    | "authMigrationRequired"
+    | "migrationAvailable"
+    | "linkedProviders"
+    | "canPlay"
   >
 >;
 
@@ -90,6 +98,10 @@ export type SessionState = {
   leaderboard: LeaderboardSummary | null;
   accessToken: string;
   onboardingRequired: boolean;
+  authMigrationRequired?: boolean;
+  migrationAvailable?: boolean;
+  linkedProviders?: string[];
+  canPlay?: boolean;
   nicknameInput: string;
   nicknameError: string;
   nicknameSaving: boolean;
@@ -97,6 +109,8 @@ export type SessionState = {
   authError: string;
   googleSignInEnabled: boolean;
   googleClientId: string;
+  discordSignInEnabled?: boolean;
+  discordClientId?: string;
 };
 
 export type LeaderboardEntrySummary = {
@@ -134,6 +148,10 @@ const initialState: SessionState = {
   leaderboard: null,
   accessToken: "",
   onboardingRequired: false,
+  authMigrationRequired: false,
+  migrationAvailable: false,
+  linkedProviders: [],
+  canPlay: false,
   nicknameInput: "",
   nicknameError: "",
   nicknameSaving: false,
@@ -141,6 +159,8 @@ const initialState: SessionState = {
   authError: "",
   googleSignInEnabled: false,
   googleClientId: "",
+  discordSignInEnabled: false,
+  discordClientId: "",
 };
 
 export class SessionController extends ObservableStore<SessionState> {
@@ -166,6 +186,8 @@ export class SessionController extends ObservableStore<SessionState> {
       ...initialState,
       googleSignInEnabled: !!params.config.googleClientId,
       googleClientId: params.config.googleClientId,
+      discordSignInEnabled: !!params.config.discordClientId,
+      discordClientId: params.config.discordClientId,
     };
     this.onResetSession = params.onResetSession;
     this.messageHandler = (event: MessageEvent) => {
@@ -177,7 +199,12 @@ export class SessionController extends ObservableStore<SessionState> {
         }
       })();
       if (expectedOrigin && event.origin !== expectedOrigin) return;
-      if (!event.data || event.data.type !== "geoduels:google-auth") return;
+      if (
+        !event.data ||
+        (event.data.type !== "geoduels:auth" &&
+          event.data.type !== "geoduels:google-auth")
+      )
+        return;
       const payload = (event.data.payload || {}) as AuthPopupPayload;
       if (!payload.ok) {
         this.patchState({
@@ -237,7 +264,19 @@ export class SessionController extends ObservableStore<SessionState> {
       typeof session.expiresAt === "number" && session.expiresAt > 0
         ? session.expiresAt
         : decodeAccessTokenExpiry(session.accessToken);
-    return { ...session, expiresAt };
+    return {
+      ...session,
+      expiresAt,
+      authMigrationRequired: !!session.authMigrationRequired,
+      migrationAvailable: !!session.migrationAvailable,
+      linkedProviders: Array.isArray(session.linkedProviders)
+        ? session.linkedProviders
+        : [],
+      canPlay:
+        typeof session.canPlay === "boolean"
+          ? session.canPlay
+          : !session.onboardingRequired && !session.authMigrationRequired,
+    };
   }
 
   private syncGoogleState() {
@@ -254,7 +293,7 @@ export class SessionController extends ObservableStore<SessionState> {
       if (isLocalHost) {
         this.patchState({
           googleSignInEnabled: false,
-          authError: `Google Sign-In is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
+          authError: `Google migration is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
         });
         return;
       }
@@ -266,7 +305,7 @@ export class SessionController extends ObservableStore<SessionState> {
       googleSignInEnabled: allowed,
       authError: allowed
         ? this.state.authError
-        : `Google Sign-In is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
+        : `Google migration is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
     });
   }
 
@@ -277,6 +316,8 @@ export class SessionController extends ObservableStore<SessionState> {
       ...initialState,
       googleSignInEnabled: this.state.googleSignInEnabled,
       googleClientId: this.config.googleClientId,
+      discordSignInEnabled: this.state.discordSignInEnabled,
+      discordClientId: this.config.discordClientId,
       authError: message || "",
     });
   };
@@ -320,6 +361,15 @@ export class SessionController extends ObservableStore<SessionState> {
       userId: data.user?.id || "",
       accessToken: data.accessToken || "",
       onboardingRequired: !!data?.onboardingRequired,
+      authMigrationRequired: !!data?.authMigrationRequired,
+      migrationAvailable: !!data?.migrationAvailable,
+      linkedProviders: Array.isArray(data.linkedProviders)
+        ? data.linkedProviders.filter((provider): provider is string => typeof provider === "string")
+        : [],
+      canPlay:
+        typeof data.canPlay === "boolean"
+          ? data.canPlay
+          : !data?.onboardingRequired && !data?.authMigrationRequired,
       nicknameInput: data.suggestedNickname || displayName,
     };
     this.applySessionSnapshot(sessionSnapshot, {
@@ -459,6 +509,10 @@ export class SessionController extends ObservableStore<SessionState> {
       userId: this.session.userId,
       accessToken: this.session.accessToken,
       onboardingRequired: this.session.onboardingRequired,
+      authMigrationRequired: this.session.authMigrationRequired,
+      migrationAvailable: this.session.migrationAvailable,
+      linkedProviders: this.session.linkedProviders,
+      canPlay: this.session.canPlay,
       nicknameInput: this.session.nicknameInput,
       ...patch,
     });

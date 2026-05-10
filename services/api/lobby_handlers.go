@@ -196,6 +196,10 @@ func (a *api) requirePlayableUser(w http.ResponseWriter, r *http.Request) (strin
 		http.Error(w, "onboarding incomplete", http.StatusForbidden)
 		return "", false
 	}
+	if identity.AuthMigrationRequired {
+		http.Error(w, "connect discord to continue", http.StatusForbidden)
+		return "", false
+	}
 	return appClaims.Sub, true
 }
 

@@ -10,6 +10,7 @@ export type WindowRuntimeConfig = {
   NEXT_PUBLIC_API_URL: string;
   NEXT_PUBLIC_GOOGLE_CLIENT_ID: string;
   NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: string;
+  NEXT_PUBLIC_DISCORD_CLIENT_ID: string;
   NEXT_PUBLIC_GOOGLE_EMBED_KEY: string;
   NEXT_PUBLIC_ADSENSE_CLIENT_ID: string;
   NEXT_PUBLIC_ADSENSE_PLAY_SLOT: string;
@@ -22,6 +23,7 @@ export type RuntimeConfig = {
   apiURL: string;
   googleClientId: string;
   googleAllowedOrigins: string[];
+  discordClientId: string;
   googleEmbedKey: string;
   adsenseClientId: string;
   adsensePlaySlot: string;
@@ -61,6 +63,7 @@ export function createRuntimeConfig(source?: Partial<WindowRuntimeConfig>): Runt
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080',
     NEXT_PUBLIC_GOOGLE_CLIENT_ID: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '',
     NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: process.env.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS || '',
+    NEXT_PUBLIC_DISCORD_CLIENT_ID: process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || '',
     NEXT_PUBLIC_GOOGLE_EMBED_KEY: process.env.NEXT_PUBLIC_GOOGLE_EMBED_KEY || 'NO_KEY_DEFINED',
     NEXT_PUBLIC_ADSENSE_CLIENT_ID: process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID || '',
     NEXT_PUBLIC_ADSENSE_PLAY_SLOT: process.env.NEXT_PUBLIC_ADSENSE_PLAY_SLOT || '',
@@ -77,6 +80,7 @@ export function createRuntimeConfig(source?: Partial<WindowRuntimeConfig>): Runt
     apiURL: publicRuntimeConfig.NEXT_PUBLIC_API_URL,
     googleClientId: publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
     googleAllowedOrigins: splitOrigins(publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS),
+    discordClientId: publicRuntimeConfig.NEXT_PUBLIC_DISCORD_CLIENT_ID,
     googleEmbedKey: publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_EMBED_KEY,
     adsenseClientId: publicRuntimeConfig.NEXT_PUBLIC_ADSENSE_CLIENT_ID,
     adsensePlaySlot: publicRuntimeConfig.NEXT_PUBLIC_ADSENSE_PLAY_SLOT,

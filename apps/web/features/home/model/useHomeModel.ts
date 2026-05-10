@@ -4,6 +4,7 @@ import { RESULT_ANIMATION_CONFIG } from "../../../components/ui/round-result-ani
 import { getRuntimeConfig } from "../../../lib/runtime-config";
 import {
   requestCompleteOnboarding,
+  requestDiscordStart,
   requestGoogleStart,
   requestGuestSession,
   requestLogout,
@@ -48,6 +49,10 @@ type AuthResponseUser = {
 type AuthResponse = {
   accessToken?: string;
   onboardingRequired?: boolean;
+  authMigrationRequired?: boolean;
+  migrationAvailable?: boolean;
+  linkedProviders?: string[];
+  canPlay?: boolean;
   suggestedNickname?: string;
   authURL?: string;
   user?: AuthResponseUser;
@@ -62,6 +67,9 @@ function currentReturnTo() {
 function clearGoogleAuthParams(url: URL) {
   url.searchParams.delete("googleAuth");
   url.searchParams.delete("googleAuthError");
+  url.searchParams.delete("auth");
+  url.searchParams.delete("authError");
+  url.searchParams.delete("provider");
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -80,6 +88,12 @@ function buildSessionFromAuthResponse(
         : fallback.userId,
     accessToken: data.accessToken || "",
     onboardingRequired: !!data.onboardingRequired,
+    authMigrationRequired: !!data.authMigrationRequired,
+    migrationAvailable: !!data.migrationAvailable,
+    linkedProviders: Array.isArray(data.linkedProviders)
+      ? data.linkedProviders.filter((provider): provider is string => typeof provider === "string")
+      : [],
+    canPlay: typeof data.canPlay === "boolean" ? data.canPlay : !data.onboardingRequired && !data.authMigrationRequired,
     nicknameInput: data.suggestedNickname || fallback.nicknameInput,
   };
 }
@@ -167,6 +181,15 @@ export function useHomeModel(options?: {
       accessToken?: string;
       returnTo?: string;
     }) => requestGoogleStart(config, accessToken, returnTo),
+  });
+  const discordStartMutation = useMutation({
+    mutationFn: ({
+      accessToken,
+      returnTo,
+    }: {
+      accessToken?: string;
+      returnTo?: string;
+    }) => requestDiscordStart(config, accessToken, returnTo),
   });
 
   async function bootstrapSession() {
@@ -305,7 +328,8 @@ export function useHomeModel(options?: {
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       const googleAuth = url.searchParams.get("googleAuth");
-      if (googleAuth === "success") {
+      const genericAuth = url.searchParams.get("auth");
+      if (googleAuth === "success" || genericAuth === "success") {
         clearGoogleAuthParams(url);
         window.history.replaceState({}, "", url.toString());
         sessionController.setAuthPending({ authLoading: true, authError: "" });
@@ -325,9 +349,11 @@ export function useHomeModel(options?: {
           cancelled = true;
         };
       }
-      if (googleAuth === "error") {
+      if (googleAuth === "error" || genericAuth === "error") {
         const errorMessage =
-          url.searchParams.get("googleAuthError") || "Login failed";
+          url.searchParams.get("googleAuthError") ||
+          url.searchParams.get("authError") ||
+          "Login failed";
         clearGoogleAuthParams(url);
         window.history.replaceState({}, "", url.toString());
         sessionController.setAuthPending({
@@ -829,7 +855,33 @@ export function useHomeModel(options?: {
     } catch (error) {
       sessionController.setAuthPending({
         authLoading: false,
-        authError: getErrorMessage(error, "Failed to start Google sign-in"),
+        authError: getErrorMessage(error, "Failed to start Google migration"),
+      });
+    }
+  };
+
+  const triggerDiscordSignIn = async () => {
+    if (typeof window === "undefined") return;
+    if (!config.discordClientId) {
+      return;
+    }
+    sessionController.setAuthPending({ authLoading: true, authError: "" });
+    try {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowOnboarding: true,
+      });
+      const data = await discordStartMutation.mutateAsync({
+        accessToken: session?.accessToken,
+        returnTo: currentReturnTo(),
+      });
+      if (!data.authURL) {
+        throw new Error("Missing Discord auth URL");
+      }
+      window.location.assign(data.authURL);
+    } catch (error) {
+      sessionController.setAuthPending({
+        authLoading: false,
+        authError: getErrorMessage(error, "Failed to start Discord sign-in"),
       });
     }
   };
@@ -1046,6 +1098,7 @@ export function useHomeModel(options?: {
       reportPlayer,
       devLogin,
       triggerGoogleSignIn,
+      triggerDiscordSignIn,
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,
       submitOnboardingNickname,

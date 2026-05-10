@@ -43,6 +43,8 @@ type Props = {
   displayName: string;
   userAvatar?: string;
   isGuest: boolean;
+  authMigrationRequired?: boolean;
+  migrationAvailable?: boolean;
   connected: boolean;
   mmr: number;
   gamesPlayed: number;
@@ -66,6 +68,7 @@ type Props = {
   onlinePlayers: number;
   maintenance: MaintenanceStatus | null;
   googleClientId: string;
+  discordClientId?: string;
   appVersion: string;
   isAdmin: boolean;
   changelogEyebrow: string;
@@ -73,6 +76,7 @@ type Props = {
   changelogMarkdown: string;
   devLogin: () => void;
   onGoogleSignIn: () => void;
+  onDiscordSignIn?: () => void;
   onBrowseLeaderboard: () => void;
   authLoading: boolean;
   authError: string;
@@ -385,6 +389,8 @@ export default function LobbyScreen({
   displayName,
   userAvatar,
   isGuest,
+  authMigrationRequired = false,
+  migrationAvailable = false,
   connected,
   mmr,
   gamesPlayed,
@@ -406,8 +412,10 @@ export default function LobbyScreen({
   updatePrivateLobbySettings = async () => { },
   queueError,
   googleClientId,
+  discordClientId,
   devLogin,
   onGoogleSignIn,
+  onDiscordSignIn = devLogin,
   onBrowseLeaderboard,
   authLoading,
   authError,
@@ -503,6 +511,7 @@ export default function LobbyScreen({
     : (displayName || userEmail || "P").slice(0, 1).toUpperCase();
   const duelModeLabel = isQueueing ? "Searching..." : isRankedAccount ? "Ranked" : "Unranked";
   const showGoogleButton = !!googleClientId;
+  const showDiscordButton = !!discordClientId;
   const maintenanceStartMs = parseTime(maintenance?.startsAt);
   const maintenanceEndMs = parseTime(maintenance?.endsAt);
   const maintenanceIsWarning = maintenance?.phase === "warning";
@@ -520,6 +529,7 @@ export default function LobbyScreen({
       : "";
   const duelDisabled =
     authLoading ||
+    authMigrationRequired ||
     nicknameSaving ||
     queuePaused ||
     playPaused ||
@@ -528,9 +538,37 @@ export default function LobbyScreen({
   const singleplayerDisabled =
     isQueueing ||
     authLoading ||
+    authMigrationRequired ||
     nicknameSaving ||
     playPaused ||
     maintenanceIsActive;
+
+  const discordSignInButton = showDiscordButton ? (
+    <button
+      type="button"
+      onClick={onDiscordSignIn}
+      disabled={authLoading}
+      className="glass-panel glass-panel-interactive group inline-flex items-center justify-center gap-3 rounded-[20px] px-3 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white disabled:cursor-not-allowed disabled:opacity-60 sm:px-4"
+    >
+      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#5865f2] text-white shadow-sm">
+        <svg viewBox="0 0 127.14 96.36" className="h-3.5 w-4" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.52-51.11-18.9-72.15ZM42.45 65.69c-6.27 0-11.43-5.73-11.43-12.78s5.05-12.79 11.43-12.79 11.54 5.78 11.43 12.79-5.06 12.78-11.43 12.78Zm42.24 0c-6.27 0-11.43-5.73-11.43-12.78s5.05-12.79 11.43-12.79 11.54 5.78 11.43 12.79-5.05 12.78-11.43 12.78Z"
+          />
+        </svg>
+      </span>
+      {authLoading ? "Signing In..." : "Sign In"}
+    </button>
+  ) : (
+    <button
+      type="button"
+      onClick={devLogin}
+      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/10"
+    >
+      {authLoading ? "Signing In..." : "Dev Login"}
+    </button>
+  );
 
   const googleSignInButton = showGoogleButton ? (
     <button
@@ -559,24 +597,9 @@ export default function LobbyScreen({
           />
         </svg>
       </span>
-      {authLoading ? (
-        "Signing In..."
-      ) : (
-        <>
-          <span className="sm:hidden">Sign In</span>
-          <span className="hidden sm:inline">Sign In</span>
-        </>
-      )}
+      {authLoading ? "Opening Google..." : "Migrate Google Account"}
     </button>
-  ) : (
-    <button
-      type="button"
-      onClick={devLogin}
-      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/10"
-    >
-      {authLoading ? "Signing In..." : "Dev Login"}
-    </button>
-  );
+  ) : null;
 
   const newsPanel = (
     <div
@@ -1337,12 +1360,41 @@ export default function LobbyScreen({
           <p className="mt-1.5 text-2xl font-black text-white">{winsPct}%</p>
         </div>
       </div>
+      {userId && migrationAvailable && googleSignInButton ? (
+        <div className="glass-panel mt-6 rounded-xl p-4">
+          <p className="mb-2 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
+            Account Migration
+          </p>
+          <p className="mb-3 text-center text-xs leading-5 text-[#a9bfd4]">
+            Replace this Discord account with your old Google account. Progress
+            on this current Discord account will be deleted.
+          </p>
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "This will replace the current Discord account with your old Google account and delete progress on this current Discord account. Continue?",
+                  )
+                ) {
+                  onGoogleSignIn();
+                }
+              }}
+              disabled={authLoading}
+              className="w-full rounded-xl border border-red-500/30 bg-red-500/10 py-3 text-[12px] font-bold uppercase tracking-wider text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
+            >
+              {authLoading ? "Opening Google..." : "Replace with old account"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {userId && !userEmail ? (
         <div className="glass-panel mt-6 rounded-xl p-4">
           <p className="mb-3 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
             Save Progress
           </p>
-          <div className="flex justify-center">{googleSignInButton}</div>
+          <div className="flex justify-center">{discordSignInButton}</div>
         </div>
       ) : null}
 
@@ -1501,7 +1553,7 @@ export default function LobbyScreen({
             </div>
           ) : (
             <div className="pointer-events-auto justify-self-end">
-              {googleSignInButton}
+              {discordSignInButton}
             </div>
           )}
         </div>
@@ -1546,6 +1598,15 @@ export default function LobbyScreen({
 
       {/* Main Content Area */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-start px-4 pb-10 pt-4 pointer-events-none sm:px-6 sm:pb-12 sm:pt-8">
+        {authMigrationRequired ? (
+          <div className="mb-4 flex w-full max-w-[1160px] flex-col items-center gap-3 rounded-[18px] border border-[#5865f2]/30 bg-[#5865f2]/12 px-4 py-4 text-center text-sm font-semibold leading-6 text-[#dbe4ff] shadow-[0_14px_40px_rgba(0,0,0,0.22)] pointer-events-auto sm:flex-row sm:justify-between sm:px-5 sm:text-left">
+            <span>
+              GeoDuels now uses Discord sign-in. Connect Discord to keep your
+              nickname, MMR, stats, and match history.
+            </span>
+            {discordSignInButton}
+          </div>
+        ) : null}
         {privateLobbyErrorNotice}
 
         <AnimatePresence mode="popLayout">

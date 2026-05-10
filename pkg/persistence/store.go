@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/pkg/contracts"
@@ -24,6 +25,8 @@ const (
 	modeDuel                        = "duel"
 	defaultSeasonID                 = "s2"
 	moderationProjectionAdvisoryKey = int64(0x67646d6f646572)
+	IdentityProviderGoogle          = "google"
+	IdentityProviderDiscord         = "discord"
 )
 
 type Profile struct {
@@ -62,17 +65,21 @@ type LeaderboardOverview struct {
 }
 
 type Identity struct {
-	Sub         string
-	Email       string
-	GoogleName  string
-	AvatarURL   string
-	Onboarded   bool
-	DisplayName string
-	AccountType string
-	IsAdmin     bool
-	IsModerator bool
-	IsBanned    bool
-	BanReason   string
+	Sub                   string
+	Email                 string
+	GoogleName            string
+	ProviderName          string
+	AvatarURL             string
+	Onboarded             bool
+	DisplayName           string
+	AccountType           string
+	LinkedProviders       []string
+	AuthMigrationRequired bool
+	MigrationAvailable    bool
+	IsAdmin               bool
+	IsModerator           bool
+	IsBanned              bool
+	BanReason             string
 }
 
 type AdminPlayerSummary = contracts.AdminPlayerSummary
@@ -201,8 +208,11 @@ type RuntimeMatch struct {
 type MatchChatMessage = contracts.MatchChatMessage
 
 type Store interface {
+	UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error)
 	UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error)
+	ProviderIdentityExists(provider, providerUserID string) (bool, error)
 	GoogleIdentityExists(googleSub string) (bool, error)
+	MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (Identity, error)
 	CreateGuestIdentity() (Identity, error)
 	GetIdentity(sub string) (Identity, error)
 	CompleteOnboarding(sub, email, displayName string) error
@@ -291,35 +301,51 @@ type pgStore struct {
 	pool *pgxpool.Pool
 }
 
-func googleOnboardedAt(linkedGuest bool) any {
+func providerOnboardedAt(linkedGuest bool) any {
 	if linkedGuest {
 		return time.Now()
 	}
 	return nil
 }
 
-func chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType string) (string, bool) {
-	if existingGoogleUserID != "" {
-		return existingGoogleUserID, false
+func googleOnboardedAt(linkedGuest bool) any {
+	return providerOnboardedAt(linkedGuest)
+}
+
+func chooseProviderIdentityUser(existingProviderUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType string) (string, bool) {
+	if existingProviderUserID != "" {
+		return existingProviderUserID, false
 	}
 	if existingEmailUserID != "" {
 		return existingEmailUserID, existingEmailAccountType == "guest"
 	}
-	if linkUserID != "" && linkAccountType == "guest" {
-		return linkUserID, true
+	if linkUserID != "" && linkAccountType != "" {
+		return linkUserID, linkAccountType == "guest"
 	}
 	return newUserID(), false
 }
 
+func chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType string) (string, bool) {
+	return chooseProviderIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
+}
+
 func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error) {
-	if googleSub == "" {
-		return Identity{}, errors.New("google subject required")
+	return s.UpsertProviderIdentity(IdentityProviderGoogle, googleSub, email, googleName, avatarURL, linkUserID)
+}
+
+func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if provider == "" {
+		return Identity{}, errors.New("provider required")
+	}
+	if providerUserID == "" {
+		return Identity{}, errors.New("provider subject required")
 	}
 	if email == "" {
-		email = googleSub + "@oidc.invalid"
+		email = providerUserID + "@oauth.invalid"
 	}
-	if googleName == "" {
-		googleName = googleSub
+	if providerName == "" {
+		providerName = providerUserID
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -329,18 +355,18 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 	}
 	defer tx.Rollback(ctx)
 
-	var existingGoogleUserID string
+	var existingProviderUserID string
 	row := tx.QueryRow(ctx, `
 		select user_id
 		from user_identities
-		where provider = 'google' and provider_user_id = $1
-	`, googleSub)
-	if err := row.Scan(&existingGoogleUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		where provider = $1 and provider_user_id = $2
+	`, provider, providerUserID)
+	if err := row.Scan(&existingProviderUserID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Identity{}, err
 	}
 	var existingEmailUserID string
 	var existingEmailAccountType string
-	if existingGoogleUserID == "" {
+	if provider == IdentityProviderGoogle && existingProviderUserID == "" && email != "" && !strings.HasSuffix(email, "@oauth.invalid") {
 		row = tx.QueryRow(ctx, `
 			select id, account_type
 			from users
@@ -353,7 +379,7 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 		}
 	}
 	var linkAccountType string
-	if existingGoogleUserID == "" && existingEmailUserID == "" && linkUserID != "" {
+	if existingProviderUserID == "" && existingEmailUserID == "" && linkUserID != "" {
 		row = tx.QueryRow(ctx, `
 			select account_type
 			from users
@@ -363,8 +389,8 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 			return Identity{}, err
 		}
 	}
-	userID, linkedGuest := chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
-	onboardedAt := googleOnboardedAt(linkedGuest)
+	userID, linkedGuest := chooseProviderIdentityUser(existingProviderUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
+	onboardedAt := providerOnboardedAt(linkedGuest)
 
 	if _, err := tx.Exec(ctx, `
 		insert into users (id, email, display_name, avatar_url, onboarded_at, account_type)
@@ -378,13 +404,13 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 			avatar_url = excluded.avatar_url,
 			onboarded_at = coalesce(users.onboarded_at, excluded.onboarded_at),
 			account_type = 'registered'
-	`, userID, email, googleName, nullable(avatarURL), onboardedAt); err != nil {
+	`, userID, nullable(email), providerName, nullable(avatarURL), onboardedAt); err != nil {
 		return Identity{}, err
 	}
-	if existingGoogleUserID != "" {
+	if existingProviderUserID != "" {
 		if _, err := tx.Exec(ctx, `
 			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-			values($1, 'google', $2, $3, $4, $5, now())
+			values($1, $2, $3, $4, $5, $6, now())
 			on conflict (provider, provider_user_id) do update set
 				user_id = excluded.user_id,
 				email = excluded.email,
@@ -395,13 +421,13 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 					else excluded.avatar_url
 				end,
 				last_seen_at = now()
-		`, userID, googleSub, email, googleName, nullable(avatarURL)); err != nil {
+		`, userID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
 			return Identity{}, err
 		}
 	} else {
 		if _, err := tx.Exec(ctx, `
 			insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
-			values($1, 'google', $2, $3, $4, $5, now())
+			values($1, $2, $3, $4, $5, $6, now())
 			on conflict (user_id, provider) do update set
 				provider_user_id = excluded.provider_user_id,
 				email = excluded.email,
@@ -412,7 +438,7 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 					else excluded.avatar_url
 				end,
 				last_seen_at = now()
-		`, userID, googleSub, email, googleName, nullable(avatarURL)); err != nil {
+		`, userID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
 			return Identity{}, err
 		}
 	}
@@ -444,8 +470,13 @@ func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, 
 }
 
 func (s *pgStore) GoogleIdentityExists(googleSub string) (bool, error) {
-	if strings.TrimSpace(googleSub) == "" {
-		return false, errors.New("google subject required")
+	return s.ProviderIdentityExists(IdentityProviderGoogle, googleSub)
+}
+
+func (s *pgStore) ProviderIdentityExists(provider, providerUserID string) (bool, error) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if provider == "" || strings.TrimSpace(providerUserID) == "" {
+		return false, errors.New("provider and subject required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -453,12 +484,154 @@ func (s *pgStore) GoogleIdentityExists(googleSub string) (bool, error) {
 	if err := s.pool.QueryRow(ctx, `
 		select exists(
 			select 1 from user_identities
-			where provider = 'google' and provider_user_id = $1
+			where provider = $1 and provider_user_id = $2
 		)
-	`, googleSub).Scan(&exists); err != nil {
+	`, provider, providerUserID).Scan(&exists); err != nil {
 		return false, err
 	}
 	return exists, nil
+}
+
+func (s *pgStore) MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (Identity, error) {
+	currentUserID = strings.TrimSpace(currentUserID)
+	googleSub = strings.TrimSpace(googleSub)
+	if currentUserID == "" || googleSub == "" {
+		return Identity{}, errors.New("current user and google subject required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var targetUserID string
+	if err := tx.QueryRow(ctx, `
+		select user_id
+		from user_identities
+		where provider = 'google' and provider_user_id = $1
+	`, googleSub).Scan(&targetUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Identity{}, errors.New("google identity not found")
+		}
+		return Identity{}, err
+	}
+	if targetUserID == currentUserID {
+		if err := tx.Commit(ctx); err != nil {
+			return Identity{}, err
+		}
+		return s.GetIdentity(targetUserID)
+	}
+
+	var discordSub string
+	if err := tx.QueryRow(ctx, `
+		select provider_user_id
+		from user_identities
+		where user_id = $1 and provider = 'discord'
+	`, currentUserID).Scan(&discordSub); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Identity{}, errors.New("current discord identity not found")
+		}
+		return Identity{}, err
+	}
+
+	var existingDiscordOwner string
+	err = tx.QueryRow(ctx, `
+		select user_id
+		from user_identities
+		where provider = 'discord' and provider_user_id = $1
+	`, discordSub).Scan(&existingDiscordOwner)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Identity{}, err
+	}
+	if existingDiscordOwner != "" && existingDiscordOwner != currentUserID {
+		return Identity{}, errors.New("discord identity already linked")
+	}
+
+	var targetHasDiscord bool
+	if err := tx.QueryRow(ctx, `
+		select exists(
+			select 1 from user_identities
+			where user_id = $1 and provider = 'discord'
+		)
+	`, targetUserID).Scan(&targetHasDiscord); err != nil {
+		return Identity{}, err
+	}
+	if targetHasDiscord {
+		return Identity{}, errors.New("target account already has discord")
+	}
+	if !deleteCurrent {
+		var hasData bool
+		if err := tx.QueryRow(ctx, `
+			select exists(select 1 from match_players where user_id = $1)
+			    or exists(select 1 from ranked_stats where user_id = $1 and games_played > 0)
+			    or exists(select 1 from user_stats where user_id = $1 and games_played > 0)
+		`, currentUserID).Scan(&hasData); err != nil {
+			return Identity{}, err
+		}
+		if hasData {
+			return Identity{}, errors.New("current account has data; deletion confirmation required")
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		update user_identities
+		set user_id = $2, last_seen_at = now()
+		where user_id = $1 and provider = 'discord'
+	`, currentUserID, targetUserID); err != nil {
+		return Identity{}, err
+	}
+	if err := deleteUserOwnedRows(ctx, tx, currentUserID); err != nil {
+		return Identity{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		update auth_sessions
+		set revoked_at = coalesce(revoked_at, now())
+		where user_id = $1 and revoked_at is null
+	`, currentUserID); err != nil {
+		return Identity{}, err
+	}
+	if _, err := tx.Exec(ctx, `delete from users where id = $1`, currentUserID); err != nil {
+		return Identity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Identity{}, err
+	}
+	return s.GetIdentity(targetUserID)
+}
+
+type txExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func deleteUserOwnedRows(ctx context.Context, tx txExecutor, userID string) error {
+	statements := []string{
+		`delete from ranked_guess_events where user_id = $1`,
+		`delete from elo_refunds where user_id = $1 or cheater_user_id = $1`,
+		`delete from user_notifications where user_id = $1`,
+		`delete from match_chat_messages where sender_user_id = $1`,
+		`delete from moderation_reports where reporter_user_id = $1 or reported_user_id = $1`,
+		`delete from moderation_actions where target_user_id = $1`,
+		`delete from moderation_case_events where actor_user_id = $1`,
+		`delete from moderation_cases where target_user_id = $1`,
+		`delete from moderation_reporter_reputation where user_id = $1`,
+		`delete from match_round_guesses where user_id = $1`,
+		`delete from match_players where user_id = $1`,
+		`delete from lobby_members where user_id = $1`,
+		`delete from lobbies where owner_user_id = $1`,
+		`delete from ranked_stats where user_id = $1`,
+		`delete from ranks where user_id = $1`,
+		`delete from user_stats where user_id = $1`,
+		`delete from auth_sessions where user_id = $1`,
+		`delete from user_identities where user_id = $1`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(ctx, stmt, userID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *pgStore) CreateGuestIdentity() (Identity, error) {
@@ -492,8 +665,9 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 		left join lateral (
 			select provider_name, avatar_url
 			from user_identities
-			where user_id = u.id and provider = 'google'
-			order by created_at asc
+			where user_id = u.id
+			  and provider in ('discord', 'google')
+			order by case provider when 'discord' then 0 when 'google' then 1 else 2 end, created_at asc
 			limit 1
 		) ui on true
 		where u.id = $1
@@ -517,7 +691,44 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 		}
 		return Identity{}, err
 	}
+	out.ProviderName = out.GoogleName
+	out.LinkedProviders, _ = s.userProviders(ctx, sub)
+	hasGoogle := containsString(out.LinkedProviders, IdentityProviderGoogle)
+	hasDiscord := containsString(out.LinkedProviders, IdentityProviderDiscord)
+	out.AuthMigrationRequired = out.AccountType != "guest" && hasGoogle && !hasDiscord
+	out.MigrationAvailable = hasDiscord && !hasGoogle
 	return out, nil
+}
+
+func (s *pgStore) userProviders(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		select provider
+		from user_identities
+		where user_id = $1
+		order by case provider when 'discord' then 0 when 'google' then 1 else 2 end, provider
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var providers []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	return providers, rows.Err()
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *pgStore) CompleteOnboarding(sub, email, displayName string) error {

@@ -7,6 +7,7 @@ export function createRuntimeConfigFixture(overrides: Partial<RuntimeConfig> = {
     apiURL: 'http://localhost:8080',
     googleClientId: '',
     googleAllowedOrigins: [],
+    discordClientId: '',
     googleEmbedKey: 'NO_KEY_DEFINED',
     adsenseClientId: '',
     adsensePlaySlot: '',

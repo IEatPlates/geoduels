@@ -25,6 +25,7 @@ type HomePageLobbyProps = {
     | "updatePrivateLobbySettings"
     | "devLogin"
     | "triggerGoogleSignIn"
+    | "triggerDiscordSignIn"
     | "loadLeaderboard"
     | "submitProfileNickname"
     | "setNicknameInput"
@@ -55,6 +56,8 @@ export default function HomePageLobby({
       displayName={auth.displayName}
       userAvatar={auth.userAvatar}
       isGuest={auth.isGuest}
+      authMigrationRequired={!!auth.authMigrationRequired}
+      migrationAvailable={!!auth.migrationAvailable}
       connected={lobby.connected}
       mmr={lobby.mmr}
       gamesPlayed={lobby.gamesPlayed}
@@ -80,6 +83,9 @@ export default function HomePageLobby({
       googleClientId={
         mounted && auth.googleSignInEnabled ? auth.googleClientId : ""
       }
+      discordClientId={
+        mounted && auth.discordSignInEnabled ? auth.discordClientId : ""
+      }
       appVersion={meta.appVersion}
       isAdmin={auth.isAdmin}
       changelogEyebrow={lobby.changelogEyebrow}
@@ -87,6 +93,7 @@ export default function HomePageLobby({
       changelogMarkdown={lobby.changelogMarkdown}
       devLogin={actions.devLogin}
       onGoogleSignIn={actions.triggerGoogleSignIn}
+      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}
       authError={auth.authError}

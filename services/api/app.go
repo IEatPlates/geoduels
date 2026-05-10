@@ -30,6 +30,8 @@ type api struct {
 	googleVerifier        *auth.GoogleVerifier
 	googleClientID        string
 	googleSecret          string
+	discordClientID       string
+	discordSecret         string
 	appAuthSecret         []byte
 	ticketAuth            []byte
 	internalSecret        string
@@ -59,6 +61,8 @@ func newAPI() (*api, error) {
 	}
 	googleClientID := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
 	googleSecret := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
+	discordClientID := strings.TrimSpace(os.Getenv("DISCORD_CLIENT_ID"))
+	discordSecret := strings.TrimSpace(os.Getenv("DISCORD_CLIENT_SECRET"))
 	var googleVerifier *auth.GoogleVerifier
 	if googleClientID != "" && googleSecret != "" {
 		googleVerifier, err = auth.NewGoogleVerifier(context.Background(), googleClientID, getenv("GOOGLE_ISSUER", ""))
@@ -106,6 +110,8 @@ func newAPI() (*api, error) {
 		googleVerifier:        googleVerifier,
 		googleClientID:        googleClientID,
 		googleSecret:          googleSecret,
+		discordClientID:       discordClientID,
+		discordSecret:         discordSecret,
 		appAuthSecret:         appAuthSecret,
 		ticketAuth:            ticketAuth,
 		internalSecret:        internalSecret,
@@ -131,6 +137,8 @@ func routes(a *api) *mux.Router {
 	r.HandleFunc("/v1/auth/guest", a.guestLogin).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/google/start", a.googleOAuthStart).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/google/callback", a.googleOAuthCallback).Methods(http.MethodGet)
+	r.HandleFunc("/v1/auth/discord/start", a.discordOAuthStart).Methods(http.MethodPost)
+	r.HandleFunc("/v1/auth/discord/callback", a.discordOAuthCallback).Methods(http.MethodGet)
 	r.HandleFunc("/v1/auth/session", a.session).Methods(http.MethodGet)
 	r.HandleFunc("/v1/auth/refresh", a.refresh).Methods(http.MethodPost)
 	r.HandleFunc("/v1/auth/logout", a.logout).Methods(http.MethodPost)

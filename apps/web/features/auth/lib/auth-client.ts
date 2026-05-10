@@ -160,7 +160,27 @@ export async function requestGoogleStart(
     body: JSON.stringify({ returnTo }),
   });
   if (!resp.ok) {
-    throw new Error(await readError(resp, "Failed to start Google sign-in"));
+    throw new Error(await readError(resp, "Failed to start Google migration"));
+  }
+  return resp.json();
+}
+
+export async function requestDiscordStart(
+  config: RuntimeConfig,
+  accessToken?: string,
+  returnTo?: string,
+) {
+  const resp = await fetch(`${config.apiURL}/v1/auth/discord/start`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ returnTo }),
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to start Discord sign-in"));
   }
   return resp.json();
 }

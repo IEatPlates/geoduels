@@ -114,10 +114,10 @@ func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
+func TestMemoryStoreCapsExpandedWindowAtFiveHundredMMR(t *testing.T) {
 	store := newMemory()
 
-	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: 2501})
+	_, match, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "high", DisplayName: "high", MMR: 2001})
 	if err != nil {
 		t.Fatalf("first join failed: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 		t.Fatalf("poll outside cap failed: %v", err)
 	}
 	if match != nil {
-		t.Fatalf("expected 1001 MMR gap to remain queued, match=%v", match)
+		t.Fatalf("expected 501 MMR gap to remain queued, match=%v", match)
 	}
 
 	_, match, err = store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "within", DisplayName: "within", MMR: 1501})
@@ -174,7 +174,7 @@ func TestMemoryStoreCapsExpandedWindowAtOneThousandMMR(t *testing.T) {
 		t.Fatalf("poll inside cap failed: %v", err)
 	}
 	if match == nil {
-		t.Fatalf("expected 1000 MMR gap to match after full expansion")
+		t.Fatalf("expected 500 MMR gap to match after full expansion")
 	}
 }
 
