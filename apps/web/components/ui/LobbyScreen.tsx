@@ -44,7 +44,7 @@ type Props = {
   userAvatar?: string;
   isGuest: boolean;
   authMigrationRequired?: boolean;
-  migrationAvailable?: boolean;
+  recoveryAvailable?: boolean;
   connected: boolean;
   mmr: number;
   gamesPlayed: number;
@@ -75,7 +75,7 @@ type Props = {
   changelogTitle: string;
   changelogMarkdown: string;
   devLogin: () => void;
-  onGoogleSignIn: () => void;
+  onGoogleRecovery: () => void;
   onDiscordSignIn?: () => void;
   onBrowseLeaderboard: () => void;
   authLoading: boolean;
@@ -390,7 +390,7 @@ export default function LobbyScreen({
   userAvatar,
   isGuest,
   authMigrationRequired = false,
-  migrationAvailable = false,
+  recoveryAvailable = false,
   connected,
   mmr,
   gamesPlayed,
@@ -414,7 +414,7 @@ export default function LobbyScreen({
   googleClientId,
   discordClientId,
   devLogin,
-  onGoogleSignIn,
+  onGoogleRecovery,
   onDiscordSignIn = devLogin,
   onBrowseLeaderboard,
   authLoading,
@@ -570,10 +570,10 @@ export default function LobbyScreen({
     </button>
   );
 
-  const googleSignInButton = showGoogleButton ? (
+  const googleRecoveryButton = showGoogleButton ? (
     <button
       type="button"
-      onClick={onGoogleSignIn}
+      onClick={onGoogleRecovery}
       disabled={authLoading}
       className="glass-panel glass-panel-interactive group inline-flex items-center justify-center gap-3 rounded-[20px] px-3 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white disabled:cursor-not-allowed disabled:opacity-60 sm:px-4"
     >
@@ -597,7 +597,7 @@ export default function LobbyScreen({
           />
         </svg>
       </span>
-      {authLoading ? "Opening Google..." : "Migrate Google Account"}
+      {authLoading ? "Opening Google..." : "Recover Google Account"}
     </button>
   ) : null;
 
@@ -1360,10 +1360,10 @@ export default function LobbyScreen({
           <p className="mt-1.5 text-2xl font-black text-white">{winsPct}%</p>
         </div>
       </div>
-      {userId && migrationAvailable && googleSignInButton ? (
+      {userId && recoveryAvailable && googleRecoveryButton ? (
         <div className="glass-panel mt-6 rounded-xl p-4">
           <p className="mb-2 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
-            Account Migration
+            Account Recovery
           </p>
           <p className="mb-3 text-center text-xs leading-5 text-[#a9bfd4]">
             Replace this Discord account with your old Google account. Progress
@@ -1378,7 +1378,7 @@ export default function LobbyScreen({
                     "This will replace the current Discord account with your old Google account and delete progress on this current Discord account. Continue?",
                   )
                 ) {
-                  onGoogleSignIn();
+                  onGoogleRecovery();
                 }
               }}
               disabled={authLoading}

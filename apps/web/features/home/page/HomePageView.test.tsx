@@ -24,7 +24,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         nicknameSaving: false,
         authLoading: false,
         authError: "",
-        googleSignInEnabled: true,
+        googleRecoveryEnabled: true,
         googleClientId: "google-client",
       },
       lobby: {
@@ -185,7 +185,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
       startPrivateLobby: vi.fn(async () => {}),
       updatePrivateLobbySettings: vi.fn(async () => {}),
       devLogin: vi.fn(async () => null),
-      triggerGoogleSignIn: vi.fn(async () => {}),
+      triggerGoogleRecovery: vi.fn(async () => {}),
       loadLeaderboard: vi.fn(),
       clearAuthSession: vi.fn(),
       submitOnboardingNickname: vi.fn(async () => {}),

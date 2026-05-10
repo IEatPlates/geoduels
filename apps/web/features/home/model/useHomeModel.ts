@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../../../lib/runtime-config";
 import {
   requestCompleteOnboarding,
   requestDiscordStart,
-  requestGoogleStart,
+  requestGoogleRecoveryStart,
   requestGuestSession,
   requestLogout,
   requestMatchReport,
@@ -50,7 +50,7 @@ type AuthResponse = {
   accessToken?: string;
   onboardingRequired?: boolean;
   authMigrationRequired?: boolean;
-  migrationAvailable?: boolean;
+  recoveryAvailable?: boolean;
   linkedProviders?: string[];
   canPlay?: boolean;
   suggestedNickname?: string;
@@ -89,7 +89,7 @@ function buildSessionFromAuthResponse(
     accessToken: data.accessToken || "",
     onboardingRequired: !!data.onboardingRequired,
     authMigrationRequired: !!data.authMigrationRequired,
-    migrationAvailable: !!data.migrationAvailable,
+    recoveryAvailable: !!data.recoveryAvailable,
     linkedProviders: Array.isArray(data.linkedProviders)
       ? data.linkedProviders.filter((provider): provider is string => typeof provider === "string")
       : [],
@@ -173,14 +173,14 @@ export function useHomeModel(options?: {
       nickname: string;
     }) => requestUpdateNickname(config, accessToken, nickname),
   });
-  const googleStartMutation = useMutation({
+  const googleRecoveryStartMutation = useMutation({
     mutationFn: ({
       accessToken,
       returnTo,
     }: {
       accessToken?: string;
       returnTo?: string;
-    }) => requestGoogleStart(config, accessToken, returnTo),
+    }) => requestGoogleRecoveryStart(config, accessToken, returnTo),
   });
   const discordStartMutation = useMutation({
     mutationFn: ({
@@ -831,11 +831,11 @@ export function useHomeModel(options?: {
     sessionController.clearAuthSession();
   };
 
-  const triggerGoogleSignIn = async () => {
+  const triggerGoogleRecovery = async () => {
     if (typeof window === "undefined") return;
     if (
       !config.googleClientId ||
-      !sessionController.getState().googleSignInEnabled
+      !sessionController.getState().googleRecoveryEnabled
     ) {
       return;
     }
@@ -844,7 +844,7 @@ export function useHomeModel(options?: {
       const session = await sessionController.ensureFreshSession(60_000, {
         allowOnboarding: true,
       });
-      const data = await googleStartMutation.mutateAsync({
+      const data = await googleRecoveryStartMutation.mutateAsync({
         accessToken: session?.accessToken,
         returnTo: currentReturnTo(),
       });
@@ -855,7 +855,7 @@ export function useHomeModel(options?: {
     } catch (error) {
       sessionController.setAuthPending({
         authLoading: false,
-        authError: getErrorMessage(error, "Failed to start Google migration"),
+        authError: getErrorMessage(error, "Failed to start Google account recovery"),
       });
     }
   };
@@ -1097,7 +1097,7 @@ export function useHomeModel(options?: {
       sendChatEmote: matchController.sendChatEmote,
       reportPlayer,
       devLogin,
-      triggerGoogleSignIn,
+      triggerGoogleRecovery,
       triggerDiscordSignIn,
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,

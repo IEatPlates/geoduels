@@ -17,7 +17,7 @@ type HomePageOverlaysProps = {
     | "reportPlayer"
     | "startSingleplayer"
     | "dismissNotification"
-    | "triggerGoogleSignIn"
+    | "triggerGoogleRecovery"
   >;
 };
 
@@ -34,11 +34,11 @@ export default function HomePageOverlays({
         nicknameInput={auth.nicknameInput}
         nicknameError={auth.nicknameError}
         nicknameSaving={auth.nicknameSaving}
-        canMigrateGoogle={(auth.linkedProviders || []).includes("discord")}
-        migrationSaving={auth.authLoading}
+        canRecoverGoogle={(auth.linkedProviders || []).includes("discord")}
+        recoverySaving={auth.authLoading}
         onChangeNickname={actions.setNicknameInput}
         onSubmit={() => void actions.submitOnboardingNickname()}
-        onMigrateGoogle={() => void actions.triggerGoogleSignIn()}
+        onRecoverGoogle={() => void actions.triggerGoogleRecovery()}
       />
       {activeNotification?.type === "mmr_refund" ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">

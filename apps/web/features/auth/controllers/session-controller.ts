@@ -24,7 +24,7 @@ type AuthPopupPayload = {
   accessToken?: string;
   onboardingRequired?: boolean;
   authMigrationRequired?: boolean;
-  migrationAvailable?: boolean;
+  recoveryAvailable?: boolean;
   linkedProviders?: string[];
   canPlay?: boolean;
   suggestedNickname?: string;
@@ -58,7 +58,7 @@ type SessionPatch = Partial<
     | "nicknameError"
     | "nicknameSaving"
     | "authMigrationRequired"
-    | "migrationAvailable"
+    | "recoveryAvailable"
     | "linkedProviders"
     | "canPlay"
   >
@@ -99,7 +99,7 @@ export type SessionState = {
   accessToken: string;
   onboardingRequired: boolean;
   authMigrationRequired?: boolean;
-  migrationAvailable?: boolean;
+  recoveryAvailable?: boolean;
   linkedProviders?: string[];
   canPlay?: boolean;
   nicknameInput: string;
@@ -107,7 +107,7 @@ export type SessionState = {
   nicknameSaving: boolean;
   authLoading: boolean;
   authError: string;
-  googleSignInEnabled: boolean;
+  googleRecoveryEnabled: boolean;
   googleClientId: string;
   discordSignInEnabled?: boolean;
   discordClientId?: string;
@@ -149,7 +149,7 @@ const initialState: SessionState = {
   accessToken: "",
   onboardingRequired: false,
   authMigrationRequired: false,
-  migrationAvailable: false,
+  recoveryAvailable: false,
   linkedProviders: [],
   canPlay: false,
   nicknameInput: "",
@@ -157,7 +157,7 @@ const initialState: SessionState = {
   nicknameSaving: false,
   authLoading: false,
   authError: "",
-  googleSignInEnabled: false,
+  googleRecoveryEnabled: false,
   googleClientId: "",
   discordSignInEnabled: false,
   discordClientId: "",
@@ -184,7 +184,7 @@ export class SessionController extends ObservableStore<SessionState> {
     this.config = params.config;
     this.state = {
       ...initialState,
-      googleSignInEnabled: !!params.config.googleClientId,
+      googleRecoveryEnabled: !!params.config.googleClientId,
       googleClientId: params.config.googleClientId,
       discordSignInEnabled: !!params.config.discordClientId,
       discordClientId: params.config.discordClientId,
@@ -221,7 +221,7 @@ export class SessionController extends ObservableStore<SessionState> {
     if (this.started || typeof window === "undefined") return;
     this.mounted = true;
     this.started = true;
-    this.syncGoogleState();
+    this.syncGoogleRecoveryState();
     window.addEventListener("message", this.messageHandler);
     this.emit();
   }
@@ -268,7 +268,7 @@ export class SessionController extends ObservableStore<SessionState> {
       ...session,
       expiresAt,
       authMigrationRequired: !!session.authMigrationRequired,
-      migrationAvailable: !!session.migrationAvailable,
+      recoveryAvailable: !!session.recoveryAvailable,
       linkedProviders: Array.isArray(session.linkedProviders)
         ? session.linkedProviders
         : [],
@@ -279,10 +279,10 @@ export class SessionController extends ObservableStore<SessionState> {
     };
   }
 
-  private syncGoogleState() {
+  private syncGoogleRecoveryState() {
     if (typeof window === "undefined") return;
     if (!this.config.googleClientId) {
-      this.patchState({ googleSignInEnabled: false });
+      this.patchState({ googleRecoveryEnabled: false });
       return;
     }
     const currentOrigin = window.location.origin;
@@ -292,20 +292,20 @@ export class SessionController extends ObservableStore<SessionState> {
         window.location.hostname === "127.0.0.1";
       if (isLocalHost) {
         this.patchState({
-          googleSignInEnabled: false,
-          authError: `Google migration is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
+          googleRecoveryEnabled: false,
+          authError: `Google account recovery is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
         });
         return;
       }
-      this.patchState({ googleSignInEnabled: true });
+      this.patchState({ googleRecoveryEnabled: true });
       return;
     }
     const allowed = this.config.googleAllowedOrigins.includes(currentOrigin);
     this.patchState({
-      googleSignInEnabled: allowed,
+      googleRecoveryEnabled: allowed,
       authError: allowed
         ? this.state.authError
-        : `Google migration is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
+        : `Google account recovery is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
     });
   }
 
@@ -314,7 +314,7 @@ export class SessionController extends ObservableStore<SessionState> {
     this.session = emptyAuthSession();
     this.patchState({
       ...initialState,
-      googleSignInEnabled: this.state.googleSignInEnabled,
+      googleRecoveryEnabled: this.state.googleRecoveryEnabled,
       googleClientId: this.config.googleClientId,
       discordSignInEnabled: this.state.discordSignInEnabled,
       discordClientId: this.config.discordClientId,
@@ -362,7 +362,7 @@ export class SessionController extends ObservableStore<SessionState> {
       accessToken: data.accessToken || "",
       onboardingRequired: !!data?.onboardingRequired,
       authMigrationRequired: !!data?.authMigrationRequired,
-      migrationAvailable: !!data?.migrationAvailable,
+      recoveryAvailable: !!data?.recoveryAvailable,
       linkedProviders: Array.isArray(data.linkedProviders)
         ? data.linkedProviders.filter((provider): provider is string => typeof provider === "string")
         : [],
@@ -510,7 +510,7 @@ export class SessionController extends ObservableStore<SessionState> {
       accessToken: this.session.accessToken,
       onboardingRequired: this.session.onboardingRequired,
       authMigrationRequired: this.session.authMigrationRequired,
-      migrationAvailable: this.session.migrationAvailable,
+      recoveryAvailable: this.session.recoveryAvailable,
       linkedProviders: this.session.linkedProviders,
       canPlay: this.session.canPlay,
       nicknameInput: this.session.nicknameInput,

@@ -31,7 +31,7 @@ function renderLobbyScreen(overrides?: Partial<React.ComponentProps<typeof Lobby
     changelogTitle: 'Latest',
     changelogMarkdown: '',
     devLogin: vi.fn(),
-    onGoogleSignIn: vi.fn(),
+    onGoogleRecovery: vi.fn(),
     onBrowseLeaderboard: vi.fn(),
     authLoading: false,
     authError: '',

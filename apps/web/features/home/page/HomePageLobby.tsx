@@ -24,7 +24,7 @@ type HomePageLobbyProps = {
     | "startPrivateLobby"
     | "updatePrivateLobbySettings"
     | "devLogin"
-    | "triggerGoogleSignIn"
+    | "triggerGoogleRecovery"
     | "triggerDiscordSignIn"
     | "loadLeaderboard"
     | "submitProfileNickname"
@@ -57,7 +57,7 @@ export default function HomePageLobby({
       userAvatar={auth.userAvatar}
       isGuest={auth.isGuest}
       authMigrationRequired={!!auth.authMigrationRequired}
-      migrationAvailable={!!auth.migrationAvailable}
+      recoveryAvailable={!!auth.recoveryAvailable}
       connected={lobby.connected}
       mmr={lobby.mmr}
       gamesPlayed={lobby.gamesPlayed}
@@ -81,7 +81,7 @@ export default function HomePageLobby({
       onlinePlayers={lobby.onlinePlayers}
       maintenance={lobby.maintenance}
       googleClientId={
-        mounted && auth.googleSignInEnabled ? auth.googleClientId : ""
+        mounted && auth.googleRecoveryEnabled ? auth.googleClientId : ""
       }
       discordClientId={
         mounted && auth.discordSignInEnabled ? auth.discordClientId : ""
@@ -92,8 +92,8 @@ export default function HomePageLobby({
       changelogTitle={lobby.changelogTitle}
       changelogMarkdown={lobby.changelogMarkdown}
       devLogin={actions.devLogin}
-      onGoogleSignIn={actions.triggerGoogleSignIn}
-      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
+      onGoogleRecovery={actions.triggerGoogleRecovery}
+      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleRecovery}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}
       authError={auth.authError}

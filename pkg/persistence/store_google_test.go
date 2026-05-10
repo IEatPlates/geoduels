@@ -88,3 +88,21 @@ func TestChooseProviderIdentityUserDoesNotUseEmailForDiscord(t *testing.T) {
 		t.Fatalf("generic chooser should still honor explicit email candidate, got %q", gotUserID)
 	}
 }
+
+func TestProviderUsesAccountEmailOnlyForGoogle(t *testing.T) {
+	if !providerUsesAccountEmail(IdentityProviderGoogle) {
+		t.Fatalf("expected Google to use the canonical users.email column")
+	}
+	if providerUsesAccountEmail(IdentityProviderDiscord) {
+		t.Fatalf("expected Discord email to stay on user_identities only")
+	}
+}
+
+func TestProviderAccountEmailSkipsDiscord(t *testing.T) {
+	if got := providerAccountEmail(IdentityProviderDiscord, "same@example.com"); got != nil {
+		t.Fatalf("discord account email = %v, want nil", got)
+	}
+	if got := providerAccountEmail(IdentityProviderGoogle, " same@example.com "); got != "same@example.com" {
+		t.Fatalf("google account email = %v, want trimmed email", got)
+	}
+}

@@ -3,7 +3,7 @@ export type AuthSessionSnapshot = {
   accessToken: string;
   onboardingRequired: boolean;
   authMigrationRequired?: boolean;
-  migrationAvailable?: boolean;
+  recoveryAvailable?: boolean;
   linkedProviders?: string[];
   canPlay?: boolean;
   nicknameInput: string;
@@ -20,7 +20,7 @@ export function emptyAuthSession(): AuthSessionSnapshot {
     accessToken: '',
     onboardingRequired: false,
     authMigrationRequired: false,
-    migrationAvailable: false,
+    recoveryAvailable: false,
     linkedProviders: [],
     canPlay: false,
     nicknameInput: '',

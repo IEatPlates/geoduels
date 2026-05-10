@@ -19,9 +19,9 @@ import (
 	"geoduels/pkg/auth"
 )
 
-const googleOAuthStateTTL = 5 * time.Minute
+const oauthStateTTL = 5 * time.Minute
 
-type googleOAuthStateClaims struct {
+type oauthStateClaims struct {
 	Origin   string `json:"origin"`
 	ReturnTo string `json:"returnTo,omitempty"`
 	LinkSub  string `json:"linkSub,omitempty"`
@@ -29,7 +29,7 @@ type googleOAuthStateClaims struct {
 	jwt.RegisteredClaims
 }
 
-var googleOAuthPopupTemplate = template.Must(template.New("google-oauth-popup").Parse(`<!doctype html>
+var oauthPopupTemplate = template.Must(template.New("oauth-popup").Parse(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -123,12 +123,12 @@ func (a *api) googleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := googleOAuthStateClaims{
+	state := oauthStateClaims{
 		Origin:   origin,
-		ReturnTo: sanitizeGoogleOAuthReturnPath(req.ReturnTo),
+		ReturnTo: sanitizeOAuthReturnPath(req.ReturnTo),
 		Nonce:    randomHex(16),
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(googleOAuthStateTTL)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(oauthStateTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -163,7 +163,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{"ok": false, "error": "Sign-in failed", "provider": "google"}
 	targetOrigin := ""
 	defer func() {
-		renderGoogleOAuthPopup(w, targetOrigin, payload)
+		renderOAuthPopup(w, targetOrigin, payload)
 	}()
 
 	if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
@@ -176,7 +176,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		payload["error"] = "missing oauth response"
 		return
 	}
-	state, err := a.parseGoogleOAuthState(stateToken)
+	state, err := a.parseOAuthState(stateToken)
 	if err != nil {
 		payload["error"] = "invalid oauth state"
 		return
@@ -204,8 +204,8 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := a.store.MigrateGoogleIdentityToCurrentDiscord(state.LinkSub, idClaims.Sub, true)
 	if err != nil {
-		log.Printf("google oauth callback: migration failed: %v", err)
-		payload["error"] = "migration failed"
+		log.Printf("google oauth callback: recovery failed: %v", err)
+		payload["error"] = "recovery failed"
 		return
 	}
 	suggestedNick := identity.GoogleName
@@ -231,7 +231,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		"accessToken":        accessToken,
 		"onboardingRequired": !identity.Onboarded,
 		"linkedProviders":    identity.LinkedProviders,
-		"migrationAvailable": identity.MigrationAvailable,
+		"recoveryAvailable":  identity.RecoveryAvailable,
 		"canPlay":            identity.Onboarded && !identity.AuthMigrationRequired,
 		"suggestedNickname":  suggestedNick,
 		"returnTo":           state.ReturnTo,
@@ -245,7 +245,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func sanitizeGoogleOAuthReturnPath(raw string) string {
+func sanitizeOAuthReturnPath(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
 		return "/"
@@ -257,19 +257,19 @@ func (a *api) googleOAuthEnabled() bool {
 	return a.googleVerifier != nil && a.googleClientID != "" && a.googleSecret != ""
 }
 
-func (a *api) parseGoogleOAuthState(raw string) (googleOAuthStateClaims, error) {
-	token, err := jwt.ParseWithClaims(raw, &googleOAuthStateClaims{}, func(token *jwt.Token) (any, error) {
+func (a *api) parseOAuthState(raw string) (oauthStateClaims, error) {
+	token, err := jwt.ParseWithClaims(raw, &oauthStateClaims{}, func(token *jwt.Token) (any, error) {
 		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, errors.New("unexpected signing method")
 		}
 		return a.appAuthSecret, nil
 	})
 	if err != nil || !token.Valid {
-		return googleOAuthStateClaims{}, errors.New("invalid state")
+		return oauthStateClaims{}, errors.New("invalid state")
 	}
-	claims, ok := token.Claims.(*googleOAuthStateClaims)
+	claims, ok := token.Claims.(*oauthStateClaims)
 	if !ok || claims.Origin == "" || claims.Nonce == "" {
-		return googleOAuthStateClaims{}, errors.New("invalid state claims")
+		return oauthStateClaims{}, errors.New("invalid state claims")
 	}
 	return *claims, nil
 }
@@ -315,11 +315,11 @@ func (a *api) googleRedirectURI(r *http.Request) string {
 	return fmt.Sprintf("%s://%s/v1/auth/google/callback", scheme, host)
 }
 
-func renderGoogleOAuthPopup(w http.ResponseWriter, targetOrigin string, payload map[string]any) {
+func renderOAuthPopup(w http.ResponseWriter, targetOrigin string, payload map[string]any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	payloadJSON, _ := json.Marshal(payload)
 	originJSON, _ := json.Marshal(targetOrigin)
-	_ = googleOAuthPopupTemplate.Execute(w, map[string]template.JS{
+	_ = oauthPopupTemplate.Execute(w, map[string]template.JS{
 		"Payload":      template.JS(payloadJSON),
 		"TargetOrigin": template.JS(originJSON),
 	})

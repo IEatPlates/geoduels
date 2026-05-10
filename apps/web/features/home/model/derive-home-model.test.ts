@@ -28,7 +28,7 @@ function createAuthState(overrides: Partial<SessionState> = {}): SessionState {
     nicknameSaving: false,
     authLoading: false,
     authError: '',
-    googleSignInEnabled: true,
+    googleRecoveryEnabled: true,
     googleClientId: 'google-client',
     ...overrides
   };

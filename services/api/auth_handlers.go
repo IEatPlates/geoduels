@@ -306,7 +306,7 @@ func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID s
 		SuggestedNickname:     defaultStr(identity.ProviderName, defaultStr(identity.GoogleName, identity.DisplayName)),
 		LinkedProviders:       identity.LinkedProviders,
 		AuthMigrationRequired: identity.AuthMigrationRequired,
-		MigrationAvailable:    identity.MigrationAvailable,
+		RecoveryAvailable:     identity.RecoveryAvailable,
 		CanPlay:               identity.Onboarded && !identity.AuthMigrationRequired,
 		User:                  sessionUser(identity),
 	}

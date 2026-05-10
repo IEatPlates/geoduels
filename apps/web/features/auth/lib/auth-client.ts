@@ -145,7 +145,7 @@ export async function requestUpdateNickname(
   return resp;
 }
 
-export async function requestGoogleStart(
+export async function requestGoogleRecoveryStart(
   config: RuntimeConfig,
   accessToken?: string,
   returnTo?: string,
@@ -160,7 +160,7 @@ export async function requestGoogleStart(
     body: JSON.stringify({ returnTo }),
   });
   if (!resp.ok) {
-    throw new Error(await readError(resp, "Failed to start Google migration"));
+    throw new Error(await readError(resp, "Failed to start Google account recovery"));
   }
   return resp.json();
 }

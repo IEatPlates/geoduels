@@ -431,7 +431,7 @@ type AuthSessionPayload struct {
 	SuggestedNickname     string   `json:"suggestedNickname,omitempty"`
 	LinkedProviders       []string `json:"linkedProviders,omitempty"`
 	AuthMigrationRequired bool     `json:"authMigrationRequired,omitempty"`
-	MigrationAvailable    bool     `json:"migrationAvailable,omitempty"`
+	RecoveryAvailable     bool     `json:"recoveryAvailable,omitempty"`
 	CanPlay               bool     `json:"canPlay"`
 	User                  AuthUser `json:"user"`
 }

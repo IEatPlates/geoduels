@@ -75,7 +75,7 @@ type Identity struct {
 	AccountType           string
 	LinkedProviders       []string
 	AuthMigrationRequired bool
-	MigrationAvailable    bool
+	RecoveryAvailable     bool
 	IsAdmin               bool
 	IsModerator           bool
 	IsBanned              bool
@@ -329,6 +329,18 @@ func chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existin
 	return chooseProviderIdentityUser(existingGoogleUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
 }
 
+func providerUsesAccountEmail(provider string) bool {
+	return provider == IdentityProviderGoogle
+}
+
+func providerAccountEmail(provider, email string) any {
+	email = strings.TrimSpace(email)
+	if providerUsesAccountEmail(provider) && email != "" {
+		return email
+	}
+	return nil
+}
+
 func (s *pgStore) UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error) {
 	return s.UpsertProviderIdentity(IdentityProviderGoogle, googleSub, email, googleName, avatarURL, linkUserID)
 }
@@ -366,7 +378,7 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 	var existingEmailUserID string
 	var existingEmailAccountType string
-	if provider == IdentityProviderGoogle && existingProviderUserID == "" && email != "" && !strings.HasSuffix(email, "@oauth.invalid") {
+	if providerUsesAccountEmail(provider) && existingProviderUserID == "" && email != "" && !strings.HasSuffix(email, "@oauth.invalid") {
 		row = tx.QueryRow(ctx, `
 			select id, account_type
 			from users
@@ -391,12 +403,13 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 	userID, linkedGuest := chooseProviderIdentityUser(existingProviderUserID, existingEmailUserID, existingEmailAccountType, linkUserID, linkAccountType)
 	onboardedAt := providerOnboardedAt(linkedGuest)
+	userEmail := providerAccountEmail(provider, email)
 
 	if _, err := tx.Exec(ctx, `
 		insert into users (id, email, display_name, avatar_url, onboarded_at, account_type)
 		values ($1, $2, $3, $4, $5, 'registered')
 		on conflict (id) do update set
-			email = excluded.email,
+			email = coalesce(excluded.email, users.email),
 			display_name = case
 				when users.onboarded_at is not null and nullif(users.display_name, '') is not null then users.display_name
 				else excluded.display_name
@@ -404,7 +417,7 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 			avatar_url = excluded.avatar_url,
 			onboarded_at = coalesce(users.onboarded_at, excluded.onboarded_at),
 			account_type = 'registered'
-	`, userID, nullable(email), providerName, nullable(avatarURL), onboardedAt); err != nil {
+	`, userID, userEmail, providerName, nullable(avatarURL), onboardedAt); err != nil {
 		return Identity{}, err
 	}
 	if existingProviderUserID != "" {
@@ -651,7 +664,7 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 	row := s.pool.QueryRow(ctx, `
 		select
 			u.id,
-			coalesce(u.email, ''),
+			coalesce(u.email, ui.email, ''),
 			coalesce(ui.provider_name, ''),
 			coalesce(u.avatar_url, ui.avatar_url, ''),
 			coalesce(u.onboarded_at is not null, false) as onboarded,
@@ -663,7 +676,7 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 				coalesce(u.ban_reason, '')
 		from users u
 		left join lateral (
-			select provider_name, avatar_url
+			select email, provider_name, avatar_url
 			from user_identities
 			where user_id = u.id
 			  and provider in ('discord', 'google')
@@ -696,7 +709,7 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 	hasGoogle := containsString(out.LinkedProviders, IdentityProviderGoogle)
 	hasDiscord := containsString(out.LinkedProviders, IdentityProviderDiscord)
 	out.AuthMigrationRequired = out.AccountType != "guest" && hasGoogle && !hasDiscord
-	out.MigrationAvailable = hasDiscord && !hasGoogle
+	out.RecoveryAvailable = hasDiscord && !hasGoogle
 	return out, nil
 }
 
@@ -746,7 +759,17 @@ func (s *pgStore) CompleteOnboarding(sub, email, displayName string) error {
 	defer cancel()
 	tag, err := s.pool.Exec(ctx, `
 		update users
-		set email = coalesce($2, email),
+		set email = case
+				when email is not null then email
+				when $2::text is null then email
+				when exists (
+					select 1
+					from users existing
+					where lower(existing.email) = lower($2)
+					  and existing.id <> users.id
+				) then email
+				else $2
+			end,
 			display_name = $3,
 			onboarded_at = coalesce(onboarded_at, now())
 		where id = $1

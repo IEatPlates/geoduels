@@ -51,12 +51,12 @@ func (a *api) discordOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := googleOAuthStateClaims{
+	state := oauthStateClaims{
 		Origin:   origin,
-		ReturnTo: sanitizeGoogleOAuthReturnPath(req.ReturnTo),
+		ReturnTo: sanitizeOAuthReturnPath(req.ReturnTo),
 		Nonce:    randomHex(16),
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(googleOAuthStateTTL)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(oauthStateTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -84,7 +84,7 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{"ok": false, "error": "Sign-in failed", "provider": "discord"}
 	targetOrigin := ""
 	defer func() {
-		renderGoogleOAuthPopup(w, targetOrigin, payload)
+		renderOAuthPopup(w, targetOrigin, payload)
 	}()
 
 	if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
@@ -97,7 +97,7 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		payload["error"] = "missing oauth response"
 		return
 	}
-	state, err := a.parseGoogleOAuthState(stateToken)
+	state, err := a.parseOAuthState(stateToken)
 	if err != nil {
 		payload["error"] = "invalid oauth state"
 		return
@@ -170,7 +170,7 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		"suggestedNickname":     defaultStr(identity.ProviderName, displayName),
 		"linkedProviders":       identity.LinkedProviders,
 		"authMigrationRequired": identity.AuthMigrationRequired,
-		"migrationAvailable":    identity.MigrationAvailable,
+		"recoveryAvailable":     identity.RecoveryAvailable,
 		"canPlay":               identity.Onboarded && !identity.AuthMigrationRequired,
 		"returnTo":              state.ReturnTo,
 		"user": map[string]any{
