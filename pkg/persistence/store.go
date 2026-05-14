@@ -411,6 +411,7 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 		on conflict (id) do update set
 			email = coalesce(excluded.email, users.email),
 			display_name = case
+				when users.account_type = 'guest' then excluded.display_name
 				when users.onboarded_at is not null and nullif(users.display_name, '') is not null then users.display_name
 				else excluded.display_name
 			end,

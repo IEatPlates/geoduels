@@ -333,6 +333,9 @@ func (a *api) autoBootstrapAdmin(identity persistence.Identity) (persistence.Ide
 func sessionUser(identity persistence.Identity) contracts.AuthUser {
 	return contracts.AuthUser{
 		ID:          identity.Sub,
+		Email:       identity.Email,
+		DisplayName: defaultStr(identity.DisplayName, identity.ProviderName),
+		AvatarURL:   identity.AvatarURL,
 		IsGuest:     identity.AccountType == "guest",
 		IsAdmin:     identity.IsAdmin,
 		IsModerator: identity.IsModerator,

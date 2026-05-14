@@ -147,6 +147,37 @@ func TestGuestLoginIgnoresNicknamePayload(t *testing.T) {
 	}
 }
 
+func TestSessionUserIncludesProfileFields(t *testing.T) {
+	user := sessionUser(persistence.Identity{
+		Sub:          "user-1",
+		Email:        "player@example.com",
+		DisplayName:  "Player",
+		ProviderName: "discord-player",
+		AvatarURL:    "https://cdn.example/avatar.png",
+		AccountType:  "registered",
+		IsAdmin:      true,
+	})
+
+	if user.ID != "user-1" {
+		t.Fatalf("user id = %q, want user-1", user.ID)
+	}
+	if user.Email != "player@example.com" {
+		t.Fatalf("email = %q, want player@example.com", user.Email)
+	}
+	if user.DisplayName != "Player" {
+		t.Fatalf("display name = %q, want Player", user.DisplayName)
+	}
+	if user.AvatarURL != "https://cdn.example/avatar.png" {
+		t.Fatalf("avatar url = %q, want profile avatar", user.AvatarURL)
+	}
+	if user.IsGuest {
+		t.Fatal("registered user should not be marked as guest")
+	}
+	if !user.IsAdmin {
+		t.Fatal("expected admin flag to be preserved")
+	}
+}
+
 func TestGuestLoginRateLimitsNewGuestsByIP(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})

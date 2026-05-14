@@ -41,6 +41,9 @@ import {
 
 type AuthResponseUser = {
   id?: string;
+  email?: string;
+  display_name?: string;
+  avatar_url?: string;
   isGuest?: boolean;
   isAdmin?: boolean;
   isModerator?: boolean;
@@ -203,6 +206,18 @@ export function useHomeModel(options?: {
       nicknameInput: current.nicknameInput,
     });
     sessionController.applySessionSnapshot(nextSession, {
+      userEmail:
+        typeof data.user?.email === "string"
+          ? data.user.email
+          : current.userEmail,
+      displayName:
+        typeof data.user?.display_name === "string" && data.user.display_name
+          ? data.user.display_name
+          : current.displayName,
+      userAvatar:
+        typeof data.user?.avatar_url === "string"
+          ? data.user.avatar_url
+          : current.userAvatar,
       isGuest:
         typeof data.user?.isGuest === "boolean"
           ? data.user.isGuest
@@ -233,6 +248,18 @@ export function useHomeModel(options?: {
       nicknameInput: current.nicknameInput,
     });
     sessionController.applySessionSnapshot(nextSession, {
+      userEmail:
+        typeof data.user?.email === "string"
+          ? data.user.email
+          : current.userEmail,
+      displayName:
+        typeof data.user?.display_name === "string" && data.user.display_name
+          ? data.user.display_name
+          : current.displayName,
+      userAvatar:
+        typeof data.user?.avatar_url === "string"
+          ? data.user.avatar_url
+          : current.userAvatar,
       isGuest:
         typeof data.user?.isGuest === "boolean"
           ? data.user.isGuest

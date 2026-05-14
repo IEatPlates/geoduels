@@ -402,6 +402,9 @@ type MatchSessionResponse struct {
 
 type AuthUser struct {
 	ID          string `json:"id"`
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 	IsGuest     bool   `json:"isGuest"`
 	IsAdmin     bool   `json:"isAdmin,omitempty"`
 	IsModerator bool   `json:"isModerator,omitempty"`
