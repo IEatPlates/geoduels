@@ -52,6 +52,7 @@ export class MatchController extends ObservableStore<MatchState> {
   private recoverRequestId = 0;
   private recoverAbort: AbortController | null = null;
   private queueAbort: AbortController | null = null;
+  private singleplayerStartInFlight = false;
   private lastSocketOpenedAt = 0;
   private lastServerSeenAt = 0;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -417,9 +418,14 @@ export class MatchController extends ObservableStore<MatchState> {
   };
 
   startSingleplayer = async () => {
+    if (this.singleplayerStartInFlight) {
+      return '';
+    }
+    this.singleplayerStartInFlight = true;
     this.recoverAbort?.abort();
     this.queueAbort?.abort();
     this.patchState({ queueError: '', connectionIssue: '' });
+    this.dispatchMatchmaking({ type: 'set_status', status: 'matched_connecting' });
     const controller = new AbortController();
     this.queueAbort = controller;
 
@@ -427,10 +433,9 @@ export class MatchController extends ObservableStore<MatchState> {
       const session = await this.sessionController.getPlayableSession();
       if (!session) {
         this.patchState({ queueError: 'Unable to create session' });
-        this.dispatchMatchmaking({ type: 'queue_error' });
+        this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
         return '';
       }
-      this.dispatchMatchmaking({ type: 'set_status', status: 'matched_connecting' });
       const assignment = await startSingleplayerSession(this.config, session.accessToken, controller.signal);
       if (!assignment.node || !assignment.ticket) {
         throw new Error('Singleplayer unavailable');
@@ -448,6 +453,7 @@ export class MatchController extends ObservableStore<MatchState> {
       this.dispatchMatchmaking({ type: 'set_status', status: 'ready' });
       return '';
     } finally {
+      this.singleplayerStartInFlight = false;
       if (this.queueAbort === controller) {
         this.queueAbort = null;
       }

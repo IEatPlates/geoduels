@@ -491,6 +491,7 @@ export default function LobbyScreen({
   }, [queueRulesets]);
 
   const isQueueing = status === "queueing";
+  const isSingleplayerLoading = status === "matched_connecting";
   const toggleQueueRuleset = (ruleset: GameRuleset) => {
     setQueueRulesets((current) => {
       if (current.includes(ruleset)) {
@@ -537,6 +538,7 @@ export default function LobbyScreen({
     queueRulesets.length === 0;
   const singleplayerDisabled =
     isQueueing ||
+    isSingleplayerLoading ||
     authLoading ||
     authMigrationRequired ||
     nicknameSaving ||
@@ -1760,8 +1762,12 @@ export default function LobbyScreen({
                       disabled={singleplayerDisabled}
                       className="w-full flex items-center justify-center rounded-[16px] bg-[#3b82f6] py-[14px] text-[16px] font-extrabold uppercase tracking-[0.08em] text-white shadow-[0_4px_16px_rgba(59,130,246,0.3)] transition-all duration-200 hover:scale-[1.01] hover:bg-[#4b8df8] hover:shadow-[0_6px_24px_rgba(59,130,246,0.4)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                     >
-                      <Play fill="currentColor" size={20} className="mr-2.5" />
-                      {playPaused || maintenanceIsActive ? "Paused" : "Play"}
+                      {isSingleplayerLoading ? (
+                        <Loader2 size={20} className="mr-2.5 animate-spin" />
+                      ) : (
+                        <Play fill="currentColor" size={20} className="mr-2.5" />
+                      )}
+                      {isSingleplayerLoading ? "Loading..." : playPaused || maintenanceIsActive ? "Paused" : "Play"}
                     </button>
                   </div>
                 </div>

@@ -456,6 +456,57 @@ describe('MatchController', () => {
     controller.destroy();
   });
 
+  it('ignores repeated singleplayer starts while the first start is bootstrapping a session', async () => {
+    const session: AuthSessionSnapshot = {
+      userId: 'u_guest',
+      accessToken: 'guest-access-token',
+      onboardingRequired: false,
+      nicknameInput: 'Guest'
+    };
+    let resolveSession: (value: AuthSessionSnapshot) => void = () => {};
+    const sessionPromise = new Promise<AuthSessionSnapshot>((resolve) => {
+      resolveSession = resolve;
+    });
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/v1/singleplayer/session')) {
+        return {
+          ok: true,
+          json: async () => ({
+            matchId: 'solo-1',
+            node: 'gameplay-node-0',
+            wsPath: '/ws/gameplay-node-0',
+            ticket: 'solo-ticket'
+          })
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const sessionController = {
+      getPlayableSession: vi.fn(() => sessionPromise),
+      ensureFreshSession: vi.fn(async () => session),
+      getSessionSnapshot: vi.fn(() => session),
+      refreshSession: vi.fn(async () => null),
+      clearAuthSession: vi.fn()
+    } as any;
+
+    const controller = new MatchController({ config: runtimeConfig, sessionController });
+    const firstStart = controller.startSingleplayer();
+    const secondStart = await controller.startSingleplayer();
+
+    expect(secondStart).toBe('');
+    expect(sessionController.getPlayableSession).toHaveBeenCalledTimes(1);
+    expect(controller.getState().matchmaking.status).toBe('matched_connecting');
+
+    resolveSession(session);
+    await expect(firstStart).resolves.toBe('solo-1');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    controller.destroy();
+  });
+
   it('does not perform startup recovery while route-owned reconnect is active', async () => {
     const session: AuthSessionSnapshot = {
       userId: 'u_match_route',

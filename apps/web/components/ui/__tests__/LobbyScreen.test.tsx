@@ -95,6 +95,15 @@ describe('LobbyScreen', () => {
     expect(playButton).toBeDisabled();
   });
 
+  it('shows singleplayer as loading while a start is connecting', () => {
+    renderLobbyScreen({ status: 'matched_connecting' });
+
+    const loadingButton = screen.getByRole('button', { name: 'Loading...' });
+
+    expect(loadingButton).toBeDisabled();
+    expect(loadingButton.querySelector('.animate-spin')).toBeInTheDocument();
+  });
+
   it('replaces the tabbed lobby content when an invite lobby is active', () => {
     renderLobbyScreen({
       privateLobby: {
