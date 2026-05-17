@@ -544,7 +544,7 @@ func (q *matchCoordinator) runLobbyCleanupLoop(interval, inactivityTTL time.Dura
 	}
 }
 
-func (q *matchCoordinator) cleanupOpenLobbies(inactivityTTL time.Duration) {
+func (q *matchCoordinator) cleanupOpenLobbies(_ time.Duration) {
 	if reopened, err := q.persist.ReopenEndedLobbies(); err != nil {
 		observability.Log("warn", "ended lobby reopen failed", map[string]any{"error": err.Error()})
 	} else if reopened > 0 {
@@ -554,48 +554,6 @@ func (q *matchCoordinator) cleanupOpenLobbies(inactivityTTL time.Duration) {
 		observability.Log("warn", "lobby expiry cleanup failed", map[string]any{"error": err.Error()})
 		return
 	}
-	ids, err := q.persist.ListOpenLobbyIDs()
-	if err != nil {
-		observability.Log("warn", "open lobby cleanup list failed", map[string]any{"error": err.Error()})
-		return
-	}
-	inactive := make([]string, 0, len(ids))
-	cutoff := time.Now().Add(-lobbyPresenceTTL).UnixMilli()
-	for _, lobbyID := range ids {
-		active, err := q.lobbyHasActivePresence(lobbyID, cutoff)
-		if err != nil {
-			observability.Log("warn", "lobby presence cleanup check failed", map[string]any{"lobbyId": lobbyID, "error": err.Error()})
-			continue
-		}
-		if !active {
-			inactive = append(inactive, lobbyID)
-		}
-	}
-	closed, err := q.persist.CloseInactiveOpenLobbies(inactive, inactivityTTL)
-	if err != nil {
-		observability.Log("warn", "inactive lobby cleanup failed", map[string]any{"error": err.Error()})
-		return
-	}
-	if closed > 0 {
-		observability.Log("info", "inactive lobbies closed", map[string]any{"count": closed})
-	}
-}
-
-func (q *matchCoordinator) lobbyHasActivePresence(lobbyID string, cutoffUnixMS int64) (bool, error) {
-	if q.redis == nil {
-		return false, nil
-	}
-	values, err := q.redis.HGetAll(context.Background(), "lobby:presence:"+lobbyID).Result()
-	if err != nil {
-		return false, err
-	}
-	for _, raw := range values {
-		ms, err := strconv.ParseInt(raw, 10, 64)
-		if err == nil && ms >= cutoffUnixMS {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func lobbyHasMember(snap contracts.LobbySnapshot, userID string) bool {
