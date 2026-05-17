@@ -3,11 +3,8 @@ type NicknameOnboardingModalProps = {
   nicknameInput: string;
   nicknameError: string;
   nicknameSaving: boolean;
-  canRecoverGoogle?: boolean;
-  recoverySaving?: boolean;
   onChangeNickname: (value: string) => void;
   onSubmit: () => void;
-  onRecoverGoogle?: () => void;
 };
 
 export default function NicknameOnboardingModal({
@@ -15,11 +12,8 @@ export default function NicknameOnboardingModal({
   nicknameInput,
   nicknameError,
   nicknameSaving,
-  canRecoverGoogle = false,
-  recoverySaving = false,
   onChangeNickname,
-  onSubmit,
-  onRecoverGoogle
+  onSubmit
 }: NicknameOnboardingModalProps) {
   if (!open) return null;
   return (
@@ -49,16 +43,6 @@ export default function NicknameOnboardingModal({
           >
             {nicknameSaving ? 'Saving...' : 'Continue'}
           </button>
-          {canRecoverGoogle && onRecoverGoogle ? (
-            <button
-              type="button"
-              onClick={onRecoverGoogle}
-              disabled={nicknameSaving || recoverySaving}
-              className="w-full rounded-[16px] border border-white/10 bg-white/5 px-4 py-3 text-[12px] font-extrabold uppercase tracking-[0.1em] text-[#d7e6f5] transition hover:bg-white/10 disabled:opacity-50"
-            >
-              {recoverySaving ? 'Opening Google...' : 'Recover old Google account'}
-            </button>
-          ) : null}
         </div>
       </div>
     </div>

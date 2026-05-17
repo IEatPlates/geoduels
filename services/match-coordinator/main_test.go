@@ -40,6 +40,10 @@ func (s *recoverTestStore) UpsertProviderIdentity(provider, providerUserID, emai
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (persistence.Identity, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) GoogleIdentityExists(googleSub string) (bool, error) {
 	panic("unexpected call")
 }
@@ -48,7 +52,11 @@ func (s *recoverTestStore) ProviderIdentityExists(provider, providerUserID strin
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (persistence.Identity, error) {
+func (s *recoverTestStore) IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) UnlinkProviderIdentity(userID, provider string) (persistence.Identity, error) {
 	panic("unexpected call")
 }
 
@@ -112,6 +120,14 @@ func (s *recoverTestStore) SetModerationSettings(settings persistence.Moderation
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) GetRankedSeasonSettings() (persistence.RankedSeasonSettings, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) RolloverRankedSeason(nextSeasonID string) (persistence.RankedSeasonRolloverResult, error) {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) ActivateMapRevision(mapKey, displayName string, dataset []byte) (persistence.MapRevisionSummary, error) {
 	panic("unexpected call")
 }
@@ -136,6 +152,10 @@ func (s *recoverTestStore) RevokeAuthSessionsForUser(userID string) error {
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) DeleteAccount(userID string) error {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) UpsertUser(userID, email, displayName string) error {
 	panic("unexpected call")
 }
@@ -145,6 +165,10 @@ func (s *recoverTestStore) GetProfile(userID string) (persistence.Profile, error
 		return profile, nil
 	}
 	return persistence.Profile{UserID: userID, DisplayName: userID, MMR: 1000}, nil
+}
+
+func (s *recoverTestStore) UpdateSelectedBadge(userID, badgeID string) (persistence.Profile, error) {
+	panic("unexpected call")
 }
 
 func (s *recoverTestStore) ListLeaderboard(mode, seasonID string, limit, offset int) ([]persistence.LeaderboardEntry, error) {
@@ -286,6 +310,10 @@ func (s *recoverTestStore) CreateLobby(ownerUserID string, mode contracts.MatchM
 	panic("unexpected call")
 }
 
+func (s *recoverTestStore) SetLobbyMode(lobbyID string, mode contracts.MatchMode) error {
+	panic("unexpected call")
+}
+
 func (s *recoverTestStore) GetLobbyByID(lobbyID string) (contracts.LobbySnapshot, bool, error) {
 	if s.lobbies == nil {
 		panic("unexpected call")
@@ -315,6 +343,10 @@ func (s *recoverTestStore) JoinLobby(lobbyID, userID string) (contracts.LobbySna
 }
 
 func (s *recoverTestStore) LeaveLobby(lobbyID, userID string) (contracts.LobbySnapshot, error) {
+	panic("unexpected call")
+}
+
+func (s *recoverTestStore) SetLobbyMemberTeam(lobbyID, userID, teamID string) (contracts.LobbySnapshot, error) {
 	panic("unexpected call")
 }
 
@@ -498,6 +530,61 @@ var _ persistence.Store = (*recoverTestStore)(nil)
 var _ matchstore.Store = (*recoverTestMatchStore)(nil)
 var _ matchstore.Store = (*queueTestMatchStore)(nil)
 var _ matchstore.Store = (*staleQueuePollStore)(nil)
+
+func TestLobbyPatchIncludesChangedMembersAndMode(t *testing.T) {
+	prev := contracts.LobbySnapshot{
+		ID:          "lob-1",
+		OwnerUserID: "u1",
+		State:       contracts.LobbyOpen,
+		Mode:        contracts.ModeDuel,
+		Members: []contracts.LobbyMember{
+			{UserID: "u1", DisplayName: "One", TeamID: "a", Connected: true},
+			{UserID: "u2", DisplayName: "Two", TeamID: "b", Connected: true},
+		},
+	}
+	next := prev
+	next.Mode = contracts.ModeTeamDuel
+	next.Members = []contracts.LobbyMember{
+		{UserID: "u1", DisplayName: "One", TeamID: "b", Connected: true},
+		{UserID: "u3", DisplayName: "Three", TeamID: "a", Connected: false},
+	}
+	patch := lobbyPatch(prev, next, 2)
+	if patch.Mode == nil || *patch.Mode != contracts.ModeTeamDuel {
+		t.Fatalf("expected mode patch, got %+v", patch.Mode)
+	}
+	if len(patch.UpsertMembers) != 2 {
+		t.Fatalf("expected changed and new members, got %+v", patch.UpsertMembers)
+	}
+	if len(patch.RemoveMemberIDs) != 1 || patch.RemoveMemberIDs[0] != "u2" {
+		t.Fatalf("expected u2 removal, got %+v", patch.RemoveMemberIDs)
+	}
+}
+
+func TestLobbyPatchIncludesPresenceChange(t *testing.T) {
+	prev := contracts.LobbySnapshot{
+		ID:          "lob-1",
+		OwnerUserID: "u1",
+		State:       contracts.LobbyOpen,
+		Mode:        contracts.ModeDuel,
+		Members: []contracts.LobbyMember{
+			{UserID: "u1", DisplayName: "One", Connected: true},
+			{UserID: "u2", DisplayName: "Two", Connected: false},
+		},
+	}
+	next := prev
+	next.Members = []contracts.LobbyMember{
+		{UserID: "u1", DisplayName: "One", Connected: true},
+		{UserID: "u2", DisplayName: "Two", Connected: true},
+	}
+	patch := lobbyPatch(prev, next, 2)
+	if len(patch.UpsertMembers) != 1 {
+		t.Fatalf("expected one presence upsert, got %+v", patch.UpsertMembers)
+	}
+	if patch.UpsertMembers[0].UserID != "u2" || !patch.UpsertMembers[0].Connected {
+		t.Fatalf("expected u2 connected patch, got %+v", patch.UpsertMembers[0])
+	}
+}
+
 var _ matchstore.Store = (*heartbeatTestStore)(nil)
 
 func queueWSURL(serverURL string) string {

@@ -23,13 +23,17 @@ type HomePageLobbyProps = {
     | "transferLobbyOwner"
     | "startPrivateLobby"
     | "updatePrivateLobbySettings"
+    | "switchPrivateLobbyTeam"
     | "devLogin"
-    | "triggerGoogleRecovery"
+    | "triggerGoogleSignIn"
     | "triggerDiscordSignIn"
+    | "unlinkAuthProvider"
     | "loadLeaderboard"
     | "submitProfileNickname"
+    | "selectBadge"
     | "setNicknameInput"
     | "clearAuthSession"
+    | "deleteAccount"
   >;
 };
 
@@ -57,7 +61,9 @@ export default function HomePageLobby({
       userAvatar={auth.userAvatar}
       isGuest={auth.isGuest}
       authMigrationRequired={!!auth.authMigrationRequired}
-      recoveryAvailable={!!auth.recoveryAvailable}
+      linkedProviders={auth.linkedProviders || []}
+      badges={auth.badges || []}
+      selectedBadge={auth.selectedBadge}
       connected={lobby.connected}
       mmr={lobby.mmr}
       gamesPlayed={lobby.gamesPlayed}
@@ -77,11 +83,12 @@ export default function HomePageLobby({
       transferLobbyOwner={actions.transferLobbyOwner}
       startPrivateLobby={actions.startPrivateLobby}
       updatePrivateLobbySettings={actions.updatePrivateLobbySettings}
+      switchPrivateLobbyTeam={actions.switchPrivateLobbyTeam}
       queueError={lobby.queueError}
       onlinePlayers={lobby.onlinePlayers}
       maintenance={lobby.maintenance}
       googleClientId={
-        mounted && auth.googleRecoveryEnabled ? auth.googleClientId : ""
+        mounted && auth.googleSignInEnabled ? auth.googleClientId : ""
       }
       discordClientId={
         mounted && auth.discordSignInEnabled ? auth.discordClientId : ""
@@ -92,8 +99,9 @@ export default function HomePageLobby({
       changelogTitle={lobby.changelogTitle}
       changelogMarkdown={lobby.changelogMarkdown}
       devLogin={actions.devLogin}
-      onGoogleRecovery={actions.triggerGoogleRecovery}
-      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleRecovery}
+      onGoogleSignIn={actions.triggerGoogleSignIn}
+      onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
+      onUnlinkAuthProvider={actions.unlinkAuthProvider}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}
       authError={auth.authError}
@@ -102,7 +110,9 @@ export default function HomePageLobby({
       nicknameSaving={auth.nicknameSaving}
       onChangeNickname={actions.setNicknameInput}
       onSaveNickname={actions.submitProfileNickname}
+      onSelectBadge={actions.selectBadge}
       onLogout={() => actions.clearAuthSession()}
+      onDeleteAccount={actions.deleteAccount}
     />
   );
 }

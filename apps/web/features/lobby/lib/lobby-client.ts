@@ -2,6 +2,10 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { normalizeHTTPBase, normalizeWSBase } from "../../../lib/runtime-config";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import type { MatchConfig } from "../../matchmaking/lib/queue-client";
+import type { PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
+
+export type PartyMode = "duel" | "team_duel" | "free_for_all";
+export type LobbyTeamId = "a" | "b";
 
 export type LobbyMember = {
   userId: string;
@@ -9,6 +13,8 @@ export type LobbyMember = {
   avatarUrl?: string;
   isGuest?: boolean;
   isAdmin?: boolean;
+  selectedBadge?: PlayerBadgeInfo | null;
+  teamId?: LobbyTeamId | "";
   role: string;
   ready?: boolean;
   connected?: boolean;
@@ -19,13 +25,26 @@ export type LobbySnapshot = {
   inviteCode: string;
   ownerUserId: string;
   state: "open" | "in_match" | "started" | "closed" | "expired";
-  mode: "duel";
+  mode: PartyMode;
   mapScope: string;
   config?: MatchConfig;
   activeMatchId?: string;
   lastMatchId?: string;
   startedMatchId?: string;
   members: LobbyMember[];
+};
+
+export type LobbyPatch = {
+  revision: number;
+  state?: LobbySnapshot["state"];
+  ownerUserId?: string;
+  mode?: PartyMode;
+  config?: MatchConfig;
+  activeMatchId?: string;
+  lastMatchId?: string;
+  startedMatchId?: string;
+  upsertMembers?: LobbyMember[];
+  removeMemberIds?: string[];
 };
 
 export type LobbyAssignment = {
@@ -41,6 +60,7 @@ export type LobbyAssignment = {
 
 export type LobbyEvent =
   | { type: "lobby_snapshot"; lobby: LobbySnapshot }
+  | { type: "lobby_patch"; patch: LobbyPatch }
   | { type: "match_assigned"; assignment: LobbyAssignment }
   | { type: "lobby_error"; message: string };
 
@@ -48,24 +68,58 @@ function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export async function createLobby(config: RuntimeConfig, accessToken: string): Promise<LobbySnapshot> {
+export async function createLobby(config: RuntimeConfig, accessToken: string, mode: PartyMode = "duel"): Promise<LobbySnapshot> {
   const resp = await fetch(`${config.apiURL}/v1/lobbies`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "duel", mapScope: "world" }),
+    body: JSON.stringify({ mode, mapScope: "world" }),
   });
   if (!resp.ok) throw new Error((await resp.text()) || "Lobby unavailable");
   return resp.json();
 }
 
-export async function updateLobbySettings(config: RuntimeConfig, lobbyId: string, accessToken: string, matchConfig: MatchConfig): Promise<LobbySnapshot> {
+export async function updateLobbySettings(config: RuntimeConfig, lobbyId: string, accessToken: string, matchConfig: MatchConfig, mode?: PartyMode): Promise<LobbySnapshot> {
   const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/settings`, {
     method: "PATCH",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ config: matchConfig }),
+    body: JSON.stringify({ config: matchConfig, mode }),
   });
   if (!resp.ok) throw new Error((await resp.text()) || "Could not update lobby settings");
   return resp.json();
+}
+
+export async function updateLobbyTeam(config: RuntimeConfig, lobbyId: string, accessToken: string, teamId: LobbyTeamId): Promise<LobbySnapshot> {
+  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/team`, {
+    method: "PATCH",
+    headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
+    body: JSON.stringify({ teamId }),
+  });
+  if (!resp.ok) throw new Error((await resp.text()) || "Could not switch team");
+  return resp.json();
+}
+
+export function applyLobbyPatch(lobby: LobbySnapshot | null, patch: LobbyPatch): LobbySnapshot | null {
+  if (!lobby) return lobby;
+  const next: LobbySnapshot = {
+    ...lobby,
+    state: patch.state ?? lobby.state,
+    ownerUserId: patch.ownerUserId ?? lobby.ownerUserId,
+    mode: patch.mode ?? lobby.mode,
+    config: patch.config ?? lobby.config,
+    activeMatchId: patch.activeMatchId ?? lobby.activeMatchId,
+    lastMatchId: patch.lastMatchId ?? lobby.lastMatchId,
+    startedMatchId: patch.startedMatchId ?? lobby.startedMatchId,
+    members: lobby.members,
+  };
+  if (patch.upsertMembers?.length || patch.removeMemberIds?.length) {
+    const removed = new Set(patch.removeMemberIds || []);
+    const members = new Map(next.members.filter((member) => !removed.has(member.userId)).map((member) => [member.userId, member]));
+    for (const member of patch.upsertMembers || []) {
+      members.set(member.userId, { ...(members.get(member.userId) || {} as LobbyMember), ...member });
+    }
+    next.members = Array.from(members.values());
+  }
+  return next;
 }
 
 export async function fetchLobby(config: RuntimeConfig, code: string): Promise<LobbySnapshot | null> {
@@ -161,6 +215,7 @@ export async function streamLobby(
       }
       const payload = msg?.payload ?? {};
       if (msg?.type === "lobby_snapshot") onEvent({ type: "lobby_snapshot", lobby: payload as LobbySnapshot });
+      if (msg?.type === "lobby_patch") onEvent({ type: "lobby_patch", patch: payload as LobbyPatch });
       if (msg?.type === "match_assigned") onEvent({ type: "match_assigned", assignment: payload as LobbyAssignment });
       if (msg?.type === "lobby_error") onEvent({ type: "lobby_error", message: payload?.message || "Lobby unavailable" });
     };

@@ -1,5 +1,6 @@
 export type SfxName =
   | 'chat'
+  | 'select'
   | 'duel-game-start'
   | 'duel-round-countdown'
   | 'duel-round-guess'
@@ -33,6 +34,10 @@ export interface SfxController {
 export const sfxRegistry: SfxRegistry = {
   chat: {
     sources: [{ src: '/sfx/chat.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    volume: 0.75
+  },
+  select: {
+    sources: [{ src: '/sfx/select.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.75
   },
   'duel-game-start': {

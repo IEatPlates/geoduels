@@ -179,7 +179,7 @@ function FitToResults({ results }: { results: RoundResult[] }) {
       if (!container || !container.isConnected) return;
       try {
         map.invalidateSize(false);
-        map.fitBounds(points, { padding: [32, 32], maxZoom: 3, animate: false });
+        map.fitBounds(points, { padding: [18, 18], maxZoom: 5, animate: false });
         fittedKeyRef.current = fitKey;
       } catch {
         // Ignore transient map lifecycle races during UI transitions.
@@ -488,7 +488,10 @@ export default function GuessMap({
 }: Props) {
   const center = useMemo<[number, number]>(() => [0, 0], []);
   const interactive = mode === 'guess' || (mode === 'result' && interactiveInResult);
-  const mapClassName = interactive ? 'minimap-interactive' : 'minimap-static';
+  const mapClassName = [
+    interactive ? 'minimap-interactive' : 'minimap-static',
+    mode === 'result' ? 'minimap-result' : '',
+  ].filter(Boolean).join(' ');
   const guessMarkerIcon = useMemo(() => {
     return createAvatarMarkerIcon({
       avatarUrl: guessAvatarUrl,

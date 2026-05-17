@@ -70,11 +70,10 @@ const sections = [
     ],
   },
   {
-    title: "10. Third-Party Services and Ads",
+    title: "10. Third-Party Services",
     body: [
-      "GeoDuels may use third-party services including Discord sign-in, migration-only Google OAuth, Google Maps or Street View-related services, Google AdSense or other advertising providers, hosting providers, infrastructure providers, and notification tools such as Discord webhooks.",
+      "GeoDuels may use third-party services including Discord sign-in, migration-only Google OAuth, Google Maps or Street View-related services, hosting providers, infrastructure providers, and notification tools such as Discord webhooks.",
       "Third-party services may have their own terms and privacy policies. GeoDuels is not responsible for third-party services or their practices.",
-      "GeoDuels may display advertising. Ads may be provided by third-party advertising services and may be subject to separate policies and controls.",
     ],
   },
   {

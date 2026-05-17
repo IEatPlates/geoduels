@@ -145,7 +145,27 @@ export async function requestUpdateNickname(
   return resp;
 }
 
-export async function requestGoogleRecoveryStart(
+export async function requestUpdateSelectedBadge(
+  config: RuntimeConfig,
+  accessToken: string,
+  badgeId: string,
+) {
+  const resp = await fetch(`${config.apiURL}/v1/me/badge`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ badgeId }),
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to update badge"));
+  }
+  return resp.json();
+}
+
+export async function requestGoogleStart(
   config: RuntimeConfig,
   accessToken?: string,
   returnTo?: string,
@@ -160,7 +180,7 @@ export async function requestGoogleRecoveryStart(
     body: JSON.stringify({ returnTo }),
   });
   if (!resp.ok) {
-    throw new Error(await readError(resp, "Failed to start Google account recovery"));
+    throw new Error(await readError(resp, "Failed to start Google sign-in"));
   }
   return resp.json();
 }
@@ -183,6 +203,45 @@ export async function requestDiscordStart(
     throw new Error(await readError(resp, "Failed to start Discord sign-in"));
   }
   return resp.json();
+}
+
+export async function requestUnlinkAuthProvider(
+  config: RuntimeConfig,
+  accessToken: string,
+  provider: "google" | "discord",
+) {
+  const resp = await fetch(
+    `${config.apiURL}/v1/me/auth-providers/${encodeURIComponent(provider)}`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to unlink sign-in method"));
+  }
+  return resp.json();
+}
+
+export async function requestDeleteAccount(
+  config: RuntimeConfig,
+  accessToken: string,
+) {
+  const resp = await fetch(`${config.apiURL}/v1/me`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ confirm: "DELETE" }),
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to delete account"));
+  }
 }
 
 export async function requestLobbyChangelog(config: RuntimeConfig) {

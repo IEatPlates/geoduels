@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"geoduels/pkg/auth"
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/persistence"
@@ -158,6 +160,63 @@ func (a *api) updateNickname(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *api) unlinkAuthProvider(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	provider := strings.ToLower(strings.TrimSpace(mux.Vars(r)["provider"]))
+	if provider != persistence.IdentityProviderGoogle && provider != persistence.IdentityProviderDiscord {
+		http.Error(w, "unknown provider", http.StatusBadRequest)
+		return
+	}
+	identity, err := a.store.UnlinkProviderIdentity(claims.Sub, provider)
+	if err != nil {
+		msg := strings.ToLower(strings.TrimSpace(err.Error()))
+		switch {
+		case strings.Contains(msg, "last sign-in method"):
+			http.Error(w, "cannot unlink the last sign-in method", http.StatusConflict)
+		case strings.Contains(msg, "not linked"):
+			http.Error(w, "provider is not linked", http.StatusNotFound)
+		default:
+			http.Error(w, "failed to unlink provider", http.StatusInternalServerError)
+		}
+		return
+	}
+	payload, err := a.issueAuthSessionPayload(identity, claims.SessionID)
+	if err != nil {
+		http.Error(w, "issue session failed", http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (a *api) deleteAccount(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Confirm) != "DELETE" {
+		http.Error(w, "confirmation required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.DeleteAccount(claims.Sub); err != nil {
+		http.Error(w, "failed to delete account", http.StatusInternalServerError)
+		return
+	}
+	a.clearRefreshCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *api) logout(w http.ResponseWriter, r *http.Request) {
 	sessionID, userID := a.sessionIdentity(r)
 	if sessionID != "" {
@@ -305,9 +364,9 @@ func (a *api) issueAuthSessionPayload(identity persistence.Identity, sessionID s
 		OnboardingRequired:    !identity.Onboarded,
 		SuggestedNickname:     defaultStr(identity.ProviderName, defaultStr(identity.GoogleName, identity.DisplayName)),
 		LinkedProviders:       identity.LinkedProviders,
-		AuthMigrationRequired: identity.AuthMigrationRequired,
-		RecoveryAvailable:     identity.RecoveryAvailable,
-		CanPlay:               identity.Onboarded && !identity.AuthMigrationRequired,
+		AuthMigrationRequired: false,
+		RecoveryAvailable:     false,
+		CanPlay:               identity.Onboarded && !identity.IsBanned,
 		User:                  sessionUser(identity),
 	}
 	return payload, nil

@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"geoduels/pkg/contracts"
+	"geoduels/pkg/lobbyevents"
 )
 
 const defaultLobbyTTL = 2 * time.Hour
@@ -27,7 +28,7 @@ func (a *api) createLobby(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = contracts.ModeDuel
 	}
-	if mode != contracts.ModeDuel {
+	if !contracts.IsPrivatePartyMode(mode) {
 		http.Error(w, "unsupported lobby mode", http.StatusBadRequest)
 		return
 	}
@@ -36,7 +37,7 @@ func (a *api) createLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
 		return
 	}
-	if req.Config.Ruleset != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 {
+	if req.Config.Ruleset != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 {
 		cfg, err := a.lobbySettings.Save(r.Context(), snap.ID, req.Config)
 		if err != nil {
 			http.Error(w, "lobby unavailable", http.StatusInternalServerError)
@@ -83,6 +84,7 @@ func (a *api) joinLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	a.publishLobbyChanged(r, snap.ID)
 	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
@@ -97,6 +99,7 @@ func (a *api) leaveLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
+	a.publishLobbyChanged(r, snap.ID)
 	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
@@ -116,6 +119,7 @@ func (a *api) kickLobbyMember(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
+	a.publishLobbyChanged(r, snap.ID)
 	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
@@ -135,6 +139,27 @@ func (a *api) transferLobbyOwner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby unavailable", http.StatusBadRequest)
 		return
 	}
+	a.publishLobbyChanged(r, snap.ID)
+	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (a *api) updateLobbyTeam(w http.ResponseWriter, r *http.Request) {
+	userID, ok := a.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	var req contracts.LobbyTeamRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, err := a.store.SetLobbyMemberTeam(id, userID, strings.TrimSpace(req.TeamID))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.publishLobbyChanged(r, snap.ID)
 	writeJSON(w, a.lobbySettings.Apply(r.Context(), snap))
 }
 
@@ -162,11 +187,23 @@ func (a *api) updateLobbySettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Mode   contracts.MatchMode   `json:"mode"`
 		Config contracts.MatchConfig `json:"config"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
+	}
+	if req.Mode != "" && !contracts.IsPrivatePartyMode(req.Mode) {
+		http.Error(w, "unsupported lobby mode", http.StatusBadRequest)
+		return
+	}
+	if req.Mode != "" && req.Mode != snap.Mode {
+		if err := a.store.SetLobbyMode(snap.ID, req.Mode); err != nil {
+			http.Error(w, "lobby settings unavailable", http.StatusBadGateway)
+			return
+		}
+		snap.Mode = req.Mode
 	}
 	cfg, err := a.lobbySettings.Save(r.Context(), snap.ID, req.Config)
 	if err != nil {
@@ -174,7 +211,15 @@ func (a *api) updateLobbySettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap.Config = cfg
+	a.publishLobbyChanged(r, snap.ID)
 	writeJSON(w, snap)
+}
+
+func (a *api) publishLobbyChanged(r *http.Request, lobbyID string) {
+	if a.redis == nil || strings.TrimSpace(lobbyID) == "" {
+		return
+	}
+	_ = a.redis.Publish(r.Context(), lobbyevents.Channel(lobbyID), lobbyevents.KindChanged).Err()
 }
 
 func (a *api) requirePlayableUser(w http.ResponseWriter, r *http.Request) (string, bool) {

@@ -7,6 +7,7 @@ type Props = {
   opponent?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
+  avatarColor?: string;
 };
 
 const sizeClass: Record<NonNullable<Props['size']>, string> = {
@@ -22,7 +23,8 @@ export default function AvatarBadge({
   alt,
   opponent = false,
   size = 'md',
-  className = ''
+  className = '',
+  avatarColor
 }: Props) {
   const [imgFailed, setImgFailed] = useState(false);
 
@@ -30,13 +32,16 @@ export default function AvatarBadge({
     setImgFailed(false);
   }, [avatarUrl]);
 
-  const base = opponent
-    ? 'from-orange-300 via-orange-500 to-red-600'
-    : 'from-emerald-200 via-emerald-400 to-teal-500';
+  const base = avatarColor
+    ? ''
+    : opponent
+      ? 'bg-gradient-to-br from-orange-300 via-orange-500 to-red-600'
+      : 'bg-gradient-to-br from-emerald-200 via-emerald-400 to-teal-500';
 
   return (
     <div
-      className={`relative grid place-items-center overflow-hidden rounded-full border border-white/20 bg-gradient-to-br ${base} ${sizeClass[size]} ${className}`}
+      className={`relative grid place-items-center overflow-hidden rounded-full border border-white/20 ${base} ${sizeClass[size]} ${className}`}
+      style={avatarColor ? { backgroundColor: avatarColor } : undefined}
     >
       {avatarUrl && !imgFailed ? (
         // Using img keeps this simple for remote avatar URLs.
@@ -47,7 +52,7 @@ export default function AvatarBadge({
           onError={() => setImgFailed(true)}
         />
       ) : (
-        <span className="font-extrabold text-slate-900">{fallback.slice(0, 1).toUpperCase()}</span>
+        <span className={`font-extrabold ${avatarColor ? 'text-white font-hud' : 'text-slate-900'}`}>{fallback.slice(0, 1).toUpperCase()}</span>
       )}
     </div>
   );

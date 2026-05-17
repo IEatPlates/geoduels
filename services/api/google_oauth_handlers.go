@@ -132,12 +132,9 @@ func (a *api) googleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-	claims, authErr := a.authenticatedClaims(r)
-	if authErr != nil {
-		http.Error(w, "google is migration-only", http.StatusUnauthorized)
-		return
+	if claims, err := a.authenticatedClaims(r); err == nil {
+		state.LinkSub = claims.Sub
 	}
-	state.LinkSub = claims.Sub
 	stateToken := jwt.NewWithClaims(jwt.SigningMethodHS256, state)
 	signedState, err := stateToken.SignedString(a.appAuthSecret)
 	if err != nil {
@@ -202,15 +199,19 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = email
 	}
-	identity, err := a.store.MigrateGoogleIdentityToCurrentDiscord(state.LinkSub, idClaims.Sub, true)
+	identity, err := a.resolveOAuthIdentity(
+		r,
+		state,
+		"google",
+		idClaims.Sub,
+		email,
+		displayName,
+		strings.TrimSpace(idClaims.Picture),
+	)
 	if err != nil {
-		log.Printf("google oauth callback: recovery failed: %v", err)
-		payload["error"] = "recovery failed"
+		log.Printf("google oauth callback: persist identity failed: %v", err)
+		payload["error"] = oauthUserError(err)
 		return
-	}
-	suggestedNick := identity.GoogleName
-	if suggestedNick == "" {
-		suggestedNick = displayName
 	}
 	refreshToken, sessionRecord, err := a.createSession(identity.Sub, r)
 	if err != nil {
@@ -225,24 +226,7 @@ func (a *api) googleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setRefreshCookie(w, r, refreshToken)
-	payload = map[string]any{
-		"ok":                 true,
-		"provider":           "google",
-		"accessToken":        accessToken,
-		"onboardingRequired": !identity.Onboarded,
-		"linkedProviders":    identity.LinkedProviders,
-		"recoveryAvailable":  identity.RecoveryAvailable,
-		"canPlay":            identity.Onboarded && !identity.AuthMigrationRequired,
-		"suggestedNickname":  suggestedNick,
-		"returnTo":           state.ReturnTo,
-		"user": map[string]any{
-			"id":           identity.Sub,
-			"display_name": defaultStr(identity.DisplayName, suggestedNick),
-			"avatar_url":   identity.AvatarURL,
-			"email":        email,
-			"isGuest":      identity.AccountType == "guest",
-		},
-	}
+	payload = a.oauthSessionPayload("google", accessToken, identity, displayName, state.ReturnTo)
 }
 
 func sanitizeOAuthReturnPath(raw string) string {

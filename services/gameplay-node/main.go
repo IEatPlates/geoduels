@@ -150,7 +150,9 @@ func main() {
 		samplerCleanup: samplerCleanup,
 		redisCleanup:   redisCleanup,
 		runtimes: map[contracts.MatchMode]gameplayRuntime{
-			contracts.ModeDuel: duelRuntime{engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeDuel:       duelRuntime{mode: contracts.ModeDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeTeamDuel:   duelRuntime{mode: contracts.ModeTeamDuel, engine: duel.New(roundForConfig), configs: duelConfigs},
+			contracts.ModeFreeForAll: duelRuntime{mode: contracts.ModeFreeForAll, engine: duel.New(roundForConfig), configs: duelConfigs},
 			contracts.ModeSingleplayer: singleplayerRuntime{engine: singleplayer.New(func(matchID string, roundIndex int) (contracts.LocationPoint, error) {
 				return samplers[contracts.MapKeyMoving].NextRound(context.Background(), matchID, roundIndex)
 			})},
@@ -234,7 +236,7 @@ func (g *gameplayNode) createMatch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	found.Config = contracts.NormalizeMatchConfig(found.Config)
-	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked, found.Config); err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err := runtime.CreateMatch(found.MatchID, found.Players, found.Profiles, found.Unranked, found.SeasonID, found.Config, found.Teams); err != nil && !strings.Contains(err.Error(), "already exists") {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -801,7 +803,7 @@ func (g *gameplayNode) activeMatchCount() int {
 	defer g.mu.RUnlock()
 	total := 0
 	for matchID := range g.matchUsers {
-		if g.matchModes[matchID] == contracts.ModeDuel {
+		if contracts.IsPrivatePartyMode(g.matchModes[matchID]) {
 			total++
 		}
 	}

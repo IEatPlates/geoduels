@@ -54,6 +54,7 @@ func (m *memoryStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req co
 		AvatarURL:         req.AvatarURL,
 		MMR:               req.MMR,
 		RatingRD:          req.RatingRD,
+		SeasonID:          req.SeasonID,
 		RankedGamesPlayed: req.RankedGamesPlayed,
 		IsGuest:           req.IsGuest,
 		Ruleset:           contracts.NormalizeRuleset(ruleset),

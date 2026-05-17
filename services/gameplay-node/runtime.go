@@ -38,7 +38,7 @@ func (r *matchConfigRegistry) Get(matchID string) contracts.MatchConfig {
 
 type gameplayRuntime interface {
 	Mode() contracts.MatchMode
-	CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error
+	CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error
 	GetSnapshot(matchID string) (*contracts.MatchSnapshot, error)
 	SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot, error)
 	AdvanceRound(matchID, userID string) (*contracts.MatchSnapshot, error)
@@ -49,16 +49,22 @@ type gameplayRuntime interface {
 }
 
 type duelRuntime struct {
+	mode    contracts.MatchMode
 	engine  *duel.Engine
 	configs *matchConfigRegistry
 }
 
-func (r duelRuntime) Mode() contracts.MatchMode { return contracts.ModeDuel }
+func (r duelRuntime) Mode() contracts.MatchMode {
+	if r.mode == "" {
+		return contracts.ModeDuel
+	}
+	return r.mode
+}
 
-func (r duelRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error {
+func (r duelRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
 	config = contracts.NormalizeMatchConfig(config)
 	r.configs.Set(matchID, config)
-	_, err := r.engine.CreateMatchWithOptions(matchID, playerIDs, profiles, duel.MatchOptions{Unranked: unranked, Config: config})
+	_, err := r.engine.CreateMatchWithOptions(matchID, playerIDs, profiles, duel.MatchOptions{Unranked: unranked, SeasonID: seasonID, Config: config, Mode: r.Mode(), Teams: teams})
 	return err
 }
 
@@ -96,7 +102,7 @@ type singleplayerRuntime struct {
 
 func (r singleplayerRuntime) Mode() contracts.MatchMode { return contracts.ModeSingleplayer }
 
-func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, config contracts.MatchConfig) error {
+func (r singleplayerRuntime) CreateMatch(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, unranked bool, seasonID string, config contracts.MatchConfig, teams map[string]string) error {
 	_, err := r.engine.CreateMatch(matchID, playerIDs, profiles)
 	return err
 }

@@ -24,7 +24,9 @@ import {
   requestAdminPutChangelog,
   requestAdminPutMaintenance,
   requestAdminPutModerationSettings,
+  requestAdminRankedSeason,
   requestAdminRemoveIPSignupBan,
+  requestAdminRolloverRankedSeason,
   requestAdminUnbanPlayer,
   requestAdminUploadCurrentMap,
 } from "../features/admin/lib/admin-client";
@@ -46,6 +48,16 @@ type Player = {
   banReason?: string;
   lastIpAddress?: string;
   reportMutedUntil?: string;
+  identities?: PlayerIdentity[];
+};
+
+type PlayerIdentity = {
+  provider: string;
+  providerUserId: string;
+  email?: string;
+  providerName?: string;
+  lastSeenAt?: string;
+  deletedAt?: string;
 };
 
 type ModerationCase = {
@@ -112,6 +124,10 @@ function fromDateTimeLocal(value: string) {
   return date.toISOString();
 }
 
+function playerIdentities(player?: Player | null) {
+  return Array.isArray(player?.identities) ? player.identities : [];
+}
+
 export default function AdminPage() {
   const config = getRuntimeConfig();
   const { view } = useHomeModel({ routeContext: "home" });
@@ -142,6 +158,8 @@ export default function AdminPage() {
   const [maintenancePlayPaused, setMaintenancePlayPaused] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState("");
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
+  const [nextSeasonId, setNextSeasonId] = useState("");
+  const [seasonRolloverResult, setSeasonRolloverResult] = useState("");
   const [debugReportedUserId, setDebugReportedUserId] = useState("");
   const [debugReportCount, setDebugReportCount] = useState(3);
   const [debugReportCategory, setDebugReportCategory] = useState("cheating");
@@ -233,6 +251,12 @@ export default function AdminPage() {
     queryFn: async () => requestAdminModerationSettings(config, accessToken),
   });
 
+  const rankedSeasonQuery = useQuery({
+    queryKey: ["admin-ranked-season", accessToken],
+    enabled: canManageAdmin && !!accessToken,
+    queryFn: async () => requestAdminRankedSeason(config, accessToken),
+  });
+
   useEffect(() => {
     const status = maintenanceQuery.data;
     if (!status) return;
@@ -284,6 +308,8 @@ export default function AdminPage() {
       queryClient.invalidateQueries({
         queryKey: ["admin-moderation-settings"],
       }),
+      queryClient.invalidateQueries({ queryKey: ["admin-ranked-season"] }),
+      queryClient.invalidateQueries({ queryKey: ["leaderboard"] }),
       queryClient.invalidateQueries({ queryKey: ["lobby-changelog"] }),
       queryClient.invalidateQueries({ queryKey: ["queue-online"] }),
     ]);
@@ -467,6 +493,18 @@ export default function AdminPage() {
       }),
     onSuccess: async (settings) => {
       setDiscordWebhookUrl(settings.discordWebhookUrl || "");
+      await refreshAdminData();
+    },
+  });
+
+  const rolloverSeasonMutation = useMutation({
+    mutationFn: async () =>
+      requestAdminRolloverRankedSeason(config, accessToken, nextSeasonId.trim()),
+    onSuccess: async (result) => {
+      setSeasonRolloverResult(
+        `Closed ${result.previousSeasonId}, opened ${result.activeSeasonId}, awarded ${result.badgesAwarded} badges, seeded ${result.playersSeeded} players.`,
+      );
+      setNextSeasonId("");
       await refreshAdminData();
     },
   });
@@ -694,6 +732,60 @@ export default function AdminPage() {
 
               {activeTab === "access" ? (
                 <>
+                  <section className="rounded-[24px] border border-white/10 bg-white/5 p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h2 className="text-lg font-black">Ranked season</h2>
+                        <p className="mt-1 text-sm text-[#a9bfd4]">
+                          Closing a season snapshots Top 100 badges, then opens
+                          a fresh ranked season.
+                        </p>
+                      </div>
+                      <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-bold uppercase tracking-[0.12em] text-[#a9bfd4]">
+                        Active {rankedSeasonQuery.data?.activeSeasonId || "loading"}
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                      <label className="block">
+                        <span className="text-xs font-bold uppercase tracking-[0.12em] text-[#8cb0a1]">
+                          Next season ID
+                        </span>
+                        <input
+                          value={nextSeasonId}
+                          onChange={(event) => {
+                            setNextSeasonId(event.target.value);
+                            setSeasonRolloverResult("");
+                          }}
+                          placeholder="s3"
+                          className="mt-2 min-h-11 w-full rounded-xl border border-white/10 bg-[#0d141c] px-3 text-sm text-white outline-none focus:border-[#2ad18f]/60"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={
+                          rolloverSeasonMutation.isPending ||
+                          !nextSeasonId.trim() ||
+                          nextSeasonId.trim() ===
+                            rankedSeasonQuery.data?.activeSeasonId
+                        }
+                        onClick={() =>
+                          void rolloverSeasonMutation.mutateAsync()
+                        }
+                        className="self-end min-h-11 rounded-xl bg-[#2ad18f] px-4 py-2 text-sm font-bold text-[#08111b] transition disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {rolloverSeasonMutation.isPending
+                          ? "Rolling over..."
+                          : "Close season"}
+                      </button>
+                    </div>
+                    <p className="mt-3 text-sm text-[#a9bfd4]">
+                      {seasonRolloverResult ||
+                        (rolloverSeasonMutation.error instanceof Error
+                          ? rolloverSeasonMutation.error.message
+                          : "No season change queued.")}
+                    </p>
+                  </section>
+
                   <section className="rounded-[24px] border border-white/10 bg-white/5 p-5">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -1301,6 +1393,37 @@ export default function AdminPage() {
                                   </p>
                                 ) : null}
                               </div>
+                              {canManageAdmin &&
+                              playerIdentities(selectedTargetPlayer).length >
+                                0 ? (
+                                <div className="mt-3 grid gap-2">
+                                  <p className="text-xs font-bold uppercase text-[#6f8aa5]">
+                                    OAuth identities
+                                  </p>
+                                  <div className="grid gap-1">
+                                    {playerIdentities(selectedTargetPlayer).map(
+                                      (identity) => (
+                                        <p
+                                          key={`${identity.provider}:${identity.providerUserId}`}
+                                          className="break-all rounded-lg border border-white/10 bg-black/15 px-2 py-1 text-xs text-[#a9bfd4]"
+                                        >
+                                          <span className="font-black uppercase text-[#8cb0a1]">
+                                            {identity.provider}
+                                          </span>{" "}
+                                          <span className="font-bold text-white">
+                                            {identity.providerUserId}
+                                          </span>
+                                          {identity.deletedAt ? (
+                                            <span className="ml-2 text-[#6f8aa5]">
+                                              unlinked
+                                            </span>
+                                          ) : null}
+                                        </p>
+                                      ),
+                                    )}
+                                  </div>
+                                </div>
+                              ) : null}
                               {selectedTargetPlayer.banReason ? (
                                 <p className="mt-3 rounded-xl border border-red-300/20 bg-red-500/10 p-3 text-sm text-red-100">
                                   {selectedTargetPlayer.banReason}
@@ -1627,7 +1750,7 @@ export default function AdminPage() {
                       <h2 className="text-lg font-black">Players</h2>
                       <p className="mt-1 text-sm text-[#a9bfd4]">
                         {canManageAdmin
-                          ? "Search by user ID, display name, or email."
+                          ? "Search by user ID, display name, email, or OAuth identity ID."
                           : "Search by user ID or display name."}
                       </p>
                     </div>
@@ -1639,7 +1762,7 @@ export default function AdminPage() {
                     />
                   </div>
                   <div className="mt-4 overflow-x-auto rounded-2xl border border-white/10 bg-black/15">
-                    <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+                    <table className="w-full min-w-[1180px] border-collapse text-left text-sm">
                       <thead className="bg-white/5 text-xs uppercase tracking-[0.12em] text-[#8cb0a1]">
                         <tr>
                           <th className="px-4 py-3 font-black">Player</th>
@@ -1687,6 +1810,24 @@ export default function AdminPage() {
                               <p className="mt-1 truncate text-xs text-[#6f8aa5]">
                                 {player.userId}
                               </p>
+                              {canManageAdmin &&
+                              playerIdentities(player).length > 0 ? (
+                                <div className="mt-2 grid gap-1">
+                                  {playerIdentities(player).map((identity) => (
+                                    <p
+                                      key={`${identity.provider}:${identity.providerUserId}`}
+                                      className="truncate text-[11px] text-[#8cb0a1]"
+                                      title={`${identity.provider}:${identity.providerUserId}`}
+                                    >
+                                      <span className="font-bold uppercase">
+                                        {identity.provider}
+                                      </span>{" "}
+                                      {identity.providerUserId}
+                                      {identity.deletedAt ? " (unlinked)" : ""}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
                             </td>
                             <td className="px-4 py-4 font-bold">
                               {player.mmr}

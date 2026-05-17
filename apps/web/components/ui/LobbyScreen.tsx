@@ -1,7 +1,9 @@
 import React, { useState, useEffect, type ReactNode } from "react";
 import {
   CheckCircle2,
+  Github,
   HelpCircle,
+  Heart,
   Play,
   X,
   Loader2,
@@ -9,24 +11,61 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  MessageCircle,
   ArrowUpRight,
   Shield,
+  Twitter,
   UserPlus,
   Copy,
   Crown,
   LogOut,
   UserMinus,
+  Trash2,
+  Youtube,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import PlayerBadge, { type PlayerBadgeInfo } from "./PlayerBadge";
+import AvatarBadge from "./AvatarBadge";
+import PlayerNameWithBadge from "./PlayerNameWithBadge";
+import { RatingTrophyIcon } from "./PlayerIdentity";
 import type { LeaderboardSummary } from "../../features/auth/controllers/session-controller";
-import type { LobbySnapshot } from "../../features/lobby/lib/lobby-client";
+import type { LobbySnapshot, LobbyTeamId, PartyMode } from "../../features/lobby/lib/lobby-client";
 import type { GameRuleset, MaintenanceStatus, MatchConfig } from "../../features/matchmaking/lib/queue-client";
-import { getRuntimeConfig } from "../../lib/runtime-config";
-import AdSenseBanner from "./AdSenseBanner";
 
-type LobbyModal = "help" | "profile" | "invite" | null;
+type LobbyModal = "help" | "profile" | "invite" | "signin" | null;
+
+const CLOCK_OPTIONS = [
+  { value: "infinite", label: "Infinite" },
+  { value: "30", label: "30s" },
+  { value: "45", label: "45s" },
+  { value: "60", label: "60s" },
+  { value: "90", label: "90s" },
+  { value: "120", label: "120s" },
+] as const;
+
+const PRESSURE_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "15", label: "15s" },
+] as const;
+
+function lobbyTeamLabel(teamId?: string) {
+  return teamId === "b" ? "Team Blue" : "Team Red";
+}
+
+function lobbyTeamTextClass(teamId?: string) {
+  return teamId === "b" ? "text-[#93c5fd]" : "text-[#fca5a5]";
+}
+
+function lobbyTeamPillClass(teamId?: string, active = false) {
+  if (teamId === "b") {
+    return active
+      ? "bg-[#2563eb] text-white"
+      : "border border-[#60a5fa]/25 bg-[#2563eb]/15 text-[#bfdbfe] hover:bg-[#2563eb]/25";
+  }
+  return active
+    ? "bg-[#dc2626] text-white"
+    : "border border-[#f87171]/25 bg-[#dc2626]/15 text-[#fecaca] hover:bg-[#dc2626]/25";
+}
 
 type PrivateLobbyView = {
   snapshot: LobbySnapshot | null;
@@ -44,7 +83,9 @@ type Props = {
   userAvatar?: string;
   isGuest: boolean;
   authMigrationRequired?: boolean;
-  recoveryAvailable?: boolean;
+  linkedProviders?: string[];
+  badges?: PlayerBadgeInfo[];
+  selectedBadge?: PlayerBadgeInfo | null;
   connected: boolean;
   mmr: number;
   gamesPlayed: number;
@@ -57,13 +98,14 @@ type Props = {
   startSingleplayer: () => void | Promise<string>;
   cancelQueue: () => void;
   privateLobby?: PrivateLobbyView;
-  createInviteLobby?: () => Promise<void>;
+  createInviteLobby?: (mode?: PartyMode) => Promise<void>;
   joinInviteLobby?: (inviteCode?: string) => Promise<void>;
   leavePrivateLobby?: () => Promise<void>;
   kickLobbyMember?: (userId: string) => Promise<void>;
   transferLobbyOwner?: (userId: string) => Promise<void>;
   startPrivateLobby?: () => Promise<void>;
-  updatePrivateLobbySettings?: (config: MatchConfig) => Promise<void>;
+  updatePrivateLobbySettings?: (config: MatchConfig, mode?: PartyMode) => Promise<void>;
+  switchPrivateLobbyTeam?: (teamId: LobbyTeamId) => Promise<void>;
   queueError: string;
   onlinePlayers: number;
   maintenance: MaintenanceStatus | null;
@@ -75,8 +117,9 @@ type Props = {
   changelogTitle: string;
   changelogMarkdown: string;
   devLogin: () => void;
-  onGoogleRecovery: () => void;
+  onGoogleSignIn: () => void;
   onDiscordSignIn?: () => void;
+  onUnlinkAuthProvider?: (provider: "google" | "discord") => void;
   onBrowseLeaderboard: () => void;
   authLoading: boolean;
   authError: string;
@@ -85,7 +128,9 @@ type Props = {
   nicknameSaving: boolean;
   onChangeNickname: (value: string) => void;
   onSaveNickname: () => Promise<boolean>;
+  onSelectBadge?: (badgeId: string) => Promise<void>;
   onLogout: () => void;
+  onDeleteAccount?: () => Promise<void>;
 };
 
 const defaultPrivateLobby: PrivateLobbyView = {
@@ -390,7 +435,9 @@ export default function LobbyScreen({
   userAvatar,
   isGuest,
   authMigrationRequired = false,
-  recoveryAvailable = false,
+  linkedProviders = [],
+  badges = [],
+  selectedBadge = null,
   connected,
   mmr,
   gamesPlayed,
@@ -410,12 +457,14 @@ export default function LobbyScreen({
   transferLobbyOwner = async () => { },
   startPrivateLobby = async () => { },
   updatePrivateLobbySettings = async () => { },
+  switchPrivateLobbyTeam = async () => { },
   queueError,
   googleClientId,
   discordClientId,
   devLogin,
-  onGoogleRecovery,
+  onGoogleSignIn,
   onDiscordSignIn = devLogin,
+  onUnlinkAuthProvider = async () => { },
   onBrowseLeaderboard,
   authLoading,
   authError,
@@ -424,6 +473,7 @@ export default function LobbyScreen({
   nicknameSaving,
   onChangeNickname,
   onSaveNickname,
+  onSelectBadge = async () => { },
   maintenance,
   onlinePlayers,
   appVersion,
@@ -432,21 +482,20 @@ export default function LobbyScreen({
   changelogTitle,
   changelogMarkdown,
   onLogout,
+  onDeleteAccount = async () => { },
 }: Props) {
-  const runtimeConfig = getRuntimeConfig();
   const [activeTab, setActiveTab] = useState(1);
   const [openModal, setOpenModal] = useState<LobbyModal>(null);
+  const [profileTab, setProfileTab] = useState<"account" | "stats" | "badges">("stats");
+  const [inspectedBadgeId, setInspectedBadgeId] = useState("");
+  const [hoveredBadgeId, setHoveredBadgeId] = useState("");
   const [isEditingProfileName, setIsEditingProfileName] = useState(false);
-  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [isBlogExpanded, setIsBlogExpanded] = useState(false);
   const [queueRulesets, setQueueRulesets] = useState<GameRuleset[]>(["moving"]);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [inviteCodeInput, setInviteCodeInput] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    setAvatarLoadFailed(false);
-  }, [userAvatar]);
 
   useEffect(() => {
     if (TABS[activeTab] === "TOP") {
@@ -513,6 +562,22 @@ export default function LobbyScreen({
   const duelModeLabel = isQueueing ? "Searching..." : isRankedAccount ? "Ranked" : "Unranked";
   const showGoogleButton = !!googleClientId;
   const showDiscordButton = !!discordClientId;
+  const hasGoogleProvider = linkedProviders.includes("google");
+  const hasDiscordProvider = linkedProviders.includes("discord");
+  const linkedProviderCount = linkedProviders.filter((provider) =>
+    provider === "google" || provider === "discord"
+  ).length;
+  const profileTabs: Array<{ id: "account" | "stats" | "badges"; label: string }> = [
+    { id: "stats", label: "Stats" },
+    { id: "badges", label: "Badges" },
+    { id: "account", label: "Account" },
+  ];
+  const focusedBadge =
+    badges.find((badge) => badge.id === hoveredBadgeId) ||
+    badges.find((badge) => badge.id === inspectedBadgeId) ||
+    badges.find((badge) => badge.id === selectedBadge?.id) ||
+    badges[0] ||
+    null;
   const maintenanceStartMs = parseTime(maintenance?.startsAt);
   const maintenanceEndMs = parseTime(maintenance?.endsAt);
   const maintenanceIsWarning = maintenance?.phase === "warning";
@@ -545,7 +610,7 @@ export default function LobbyScreen({
     playPaused ||
     maintenanceIsActive;
 
-  const discordSignInButton = showDiscordButton ? (
+  const discordProviderButton = showDiscordButton ? (
     <button
       type="button"
       onClick={onDiscordSignIn}
@@ -560,22 +625,34 @@ export default function LobbyScreen({
           />
         </svg>
       </span>
-      {authLoading ? "Signing In..." : "Sign In"}
+      {authLoading ? "Signing In..." : "Continue With Discord"}
     </button>
-  ) : (
-    <button
-      type="button"
-      onClick={devLogin}
-      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/10"
-    >
-      {authLoading ? "Signing In..." : "Dev Login"}
-    </button>
-  );
+  ) : null;
 
-  const googleRecoveryButton = showGoogleButton ? (
+  const signInButton =
+    showGoogleButton || showDiscordButton ? (
+      <button
+        type="button"
+        onClick={() => setOpenModal("signin")}
+        disabled={authLoading}
+        className="glass-panel glass-panel-interactive group inline-flex items-center justify-center gap-3 rounded-[20px] px-3 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white disabled:cursor-not-allowed disabled:opacity-60 sm:px-4"
+      >
+        {authLoading ? "Signing In..." : "Sign In"}
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={devLogin}
+        className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white transition hover:bg-white/10"
+      >
+        {authLoading ? "Signing In..." : "Dev Login"}
+      </button>
+    );
+
+  const googleProviderButton = showGoogleButton ? (
     <button
       type="button"
-      onClick={onGoogleRecovery}
+      onClick={onGoogleSignIn}
       disabled={authLoading}
       className="glass-panel glass-panel-interactive group inline-flex items-center justify-center gap-3 rounded-[20px] px-3 py-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-white disabled:cursor-not-allowed disabled:opacity-60 sm:px-4"
     >
@@ -599,7 +676,7 @@ export default function LobbyScreen({
           />
         </svg>
       </span>
-      {authLoading ? "Opening Google..." : "Recover Google Account"}
+      {authLoading ? "Opening Google..." : "Continue With Google"}
     </button>
   ) : null;
 
@@ -648,28 +725,28 @@ export default function LobbyScreen({
     </div>
   );
 
-  const discordCard = (
+  const donateCard = (
     <a
-      href="https://discord.gg/xxz8V9UU7Z"
+      href="https://donate.stripe.com/cNi8wH68d3O1ece8Xm0oM00"
       target="_blank"
       rel="noreferrer"
       className="glass-panel glass-panel-interactive lobby-feature-card group flex w-full items-center gap-4 rounded-[20px] p-5"
-      style={{ animationDelay: "-1s" }}
+      style={{ animationDelay: "-0.75s" }}
     >
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#5865f2]/14 text-[#8fa3ff]">
-        <MessageCircle size={22} />
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#ef476f]/14 text-[#f7a1b5]">
+        <Heart size={22} />
       </div>
       <div className="min-w-0 flex-1">
-        <span className="mb-1 block text-[12px] font-bold uppercase tracking-[0.16em] text-[#6b8b80]">
-          Community
+        <span className="mb-1 block text-[12px] font-bold uppercase tracking-[0.16em] text-[#ee7f98]">
+          Donate
         </span>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="text-[18px] font-extrabold tracking-tight text-white">
-              Discord Server
+              Support GeoDuels
             </h3>
             <p className="mt-1 text-[13px] leading-relaxed text-[#a9bfd4]">
-              Join to chat with other GeoDuels players!
+              Help GeoDuels stay ad-free and in active development by donating :D
             </p>
           </div>
           <ArrowUpRight
@@ -679,6 +756,52 @@ export default function LobbyScreen({
         </div>
       </div>
     </a>
+  );
+
+  const socialLinksCard = (
+    <div
+      className="glass-panel lobby-feature-card flex w-full flex-col gap-4 rounded-[20px] p-5"
+      style={{ animationDelay: "-1s" }}
+    >
+      <span className="block text-[12px] font-bold uppercase tracking-[0.16em] text-[#6b8b80]">
+        Community
+      </span>
+      <div className="flex flex-wrap gap-3">
+        {[
+          {
+            href: "https://discord.gg/xxz8V9UU7Z",
+            label: "Discord",
+            icon: <svg viewBox="0 0 127.14 96.36" className="h-5 w-5" aria-hidden="true"><path fill="currentColor" d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.52-51.11-18.9-72.15ZM42.45 65.69c-6.27 0-11.43-5.73-11.43-12.78s5.05-12.79 11.43-12.79 11.54 5.78 11.43 12.79-5.06 12.78-11.43 12.78Zm42.24 0c-6.27 0-11.43-5.73-11.43-12.78s5.05-12.79 11.43-12.79 11.54 5.78 11.43 12.79-5.05 12.78-11.43 12.78Z" /></svg>,
+          },
+          {
+            href: "https://github.com/sourcelocation/geoduels",
+            label: "GitHub",
+            icon: <Github size={20} />,
+          },
+          {
+            href: "http://twitter.com/sourceloc",
+            label: "Twitter",
+            icon: <Twitter size={20} />,
+          },
+          {
+            href: "https://youtube.com/@sourcelocation",
+            label: "YouTube",
+            icon: <Youtube size={20} />,
+          },
+        ].map((social) => (
+          <a
+            key={social.label}
+            href={social.href}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={social.label}
+            className="glass-panel glass-panel-interactive flex h-12 w-12 items-center justify-center rounded-full text-white"
+          >
+            {social.icon}
+          </a>
+        ))}
+      </div>
+    </div>
   );
 
   const onlineStatusCard = (
@@ -703,26 +826,44 @@ export default function LobbyScreen({
       : "";
   const privateLobbyActive = !!privateLobby.snapshot;
   const lobbyMembers = privateLobby.snapshot?.members || [];
-  const lobbyConfig = privateLobby.snapshot?.config || { ruleset: "moving", roundTimerMode: "pressure" };
+  const lobbyConfig = privateLobby.snapshot?.config || { ruleset: "moving", roundTimerMode: "none", pressureTimeLimitMs: 15000 };
+  const lobbyMode = privateLobby.snapshot?.mode || "duel";
   const lobbyClockOn = lobbyConfig.roundTimerMode === "fixed";
+  const lobbyPressureOn =
+    (typeof lobbyConfig.pressureTimeLimitMs === "number" && lobbyConfig.pressureTimeLimitMs > 0) ||
+    lobbyConfig.roundTimerMode === "pressure";
   const lobbyRoundSeconds = Math.round((lobbyConfig.roundTimeLimitMs || 45000) / 1000);
+  const lobbyPressureSeconds = lobbyPressureOn ? Math.round((lobbyConfig.pressureTimeLimitMs || 15000) / 1000) : 0;
   const saveLobbyConfig = (patch: MatchConfig) => {
     const next: MatchConfig = {
       ...lobbyConfig,
       ...patch,
     };
     if (next.roundTimerMode !== "fixed") {
+      next.roundTimerMode = "none";
       next.roundTimeLimitMs = undefined;
     } else {
       next.roundTimeLimitMs = Math.max(10000, Math.min(120000, next.roundTimeLimitMs || 45000));
     }
+    if ((next.pressureTimeLimitMs || 0) !== 15000) {
+      next.pressureTimeLimitMs = undefined;
+    }
     void updatePrivateLobbySettings(next);
   };
+  const saveLobbyMode = (mode: PartyMode) => {
+    void updatePrivateLobbySettings(lobbyConfig, mode);
+  };
   const missingLobbyMembers = lobbyMembers.filter((member) => !member.connected);
+  const teamACount = lobbyMembers.filter((member) => (member.teamId || "a") === "a").length;
+  const teamBCount = lobbyMembers.filter((member) => member.teamId === "b").length;
   const canStartPrivateLobby =
     privateLobby.isOwner &&
     privateLobby.snapshot?.state === "open" &&
-    lobbyMembers.length === 2 &&
+    (
+      (lobbyMode === "duel" && lobbyMembers.length === 2) ||
+      (lobbyMode === "team_duel" && lobbyMembers.length >= 2 && lobbyMembers.length <= 8 && teamACount > 0 && teamBCount > 0) ||
+      (lobbyMode === "free_for_all" && lobbyMembers.length >= 2 && lobbyMembers.length <= 8)
+    ) &&
     missingLobbyMembers.length === 0;
   const copyInvite = () => {
     if (!lobbyInviteURL) return;
@@ -792,46 +933,89 @@ export default function LobbyScreen({
             {privateLobby.snapshot ? (
               <div className="rounded-[16px] border border-white/10 bg-black/20 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b8b80]">
-                      Game Settings
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-white">
-                      {(lobbyConfig.ruleset === "nmpz" ? "NMPZ" : "Moving")} · {lobbyClockOn ? `${lobbyRoundSeconds}s clock` : "Clock off"}
-                    </p>
-                  </div>
+                  {!(privateLobby.isOwner && privateLobby.snapshot.state === "open") ? (
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b8b80]">
+                        Game Settings
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-white">
+                        {(lobbyConfig.ruleset === "nmpz" ? "NMPZ" : "Moving")} · {lobbyClockOn ? `${lobbyRoundSeconds}s clock` : "Infinite clock"} · {lobbyPressureOn ? `${lobbyPressureSeconds}s pressure` : "No pressure"}
+                      </p>
+                    </div>
+                  ) : null}
                   {privateLobby.isOwner && privateLobby.snapshot.state === "open" ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(["moving", "nmpz"] as const).map((ruleset) => (
-                        <button
-                          key={ruleset}
-                          type="button"
-                          onClick={() => saveLobbyConfig({ ruleset })}
+                    <div className="grid w-full gap-3 sm:max-w-[680px] sm:grid-cols-4">
+                      <label className="grid gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#6b8b80]">
+                          Mode
+                        </span>
+                        <select
+                          value={lobbyMode}
+                          onChange={(event) => saveLobbyMode(event.target.value as PartyMode)}
                           disabled={privateLobby.busy}
-                          className={`min-h-[38px] rounded-[10px] px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] transition disabled:opacity-50 ${lobbyConfig.ruleset === ruleset ? "bg-[#22d385] text-white" : "border border-white/10 bg-white/[0.08] text-white hover:bg-white/[0.12]"}`}
+                          className="h-[40px] rounded-[10px] border border-white/10 bg-[#101a20]/90 px-3 text-[13px] font-bold text-white outline-none transition focus:border-[#2ad18f]/60 disabled:opacity-50"
                         >
-                          {ruleset === "nmpz" ? "NMPZ" : "Moving"}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => saveLobbyConfig({ roundTimerMode: lobbyClockOn ? "pressure" : "fixed", roundTimeLimitMs: lobbyClockOn ? undefined : lobbyRoundSeconds * 1000 })}
-                        disabled={privateLobby.busy}
-                        className={`min-h-[38px] rounded-[10px] px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] transition disabled:opacity-50 ${lobbyClockOn ? "bg-[#22d385] text-white" : "border border-white/10 bg-white/[0.08] text-white hover:bg-white/[0.12]"}`}
-                      >
-                        Clock
-                      </button>
-                      {lobbyClockOn ? (
-                        <input
-                          type="number"
-                          min={10}
-                          max={120}
-                          value={lobbyRoundSeconds}
-                          onChange={(event) => saveLobbyConfig({ roundTimerMode: "fixed", roundTimeLimitMs: Number(event.target.value) * 1000 })}
+                          <option value="duel">Duel</option>
+                          <option value="team_duel">Team Duel</option>
+                          <option value="free_for_all">Free For All</option>
+                        </select>
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#6b8b80]">
+                          Map
+                        </span>
+                        <select
+                          value={lobbyConfig.ruleset || "moving"}
+                          onChange={(event) => saveLobbyConfig({ ruleset: event.target.value as GameRuleset })}
                           disabled={privateLobby.busy}
-                          className="h-[38px] w-20 rounded-[10px] border border-white/10 bg-[#101a20]/80 px-2 text-sm font-bold text-white outline-none focus:border-[#2ad18f]/60 disabled:opacity-50"
-                        />
-                      ) : null}
+                          className="h-[40px] rounded-[10px] border border-white/10 bg-[#101a20]/90 px-3 text-[13px] font-bold text-white outline-none transition focus:border-[#2ad18f]/60 disabled:opacity-50"
+                        >
+                          <option value="moving">Moving</option>
+                          <option value="nmpz">NMPZ</option>
+                        </select>
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#6b8b80]">
+                          Clock
+                        </span>
+                        <select
+                          value={lobbyClockOn ? String(lobbyRoundSeconds) : "infinite"}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            saveLobbyConfig(
+                              value === "infinite"
+                                ? { roundTimerMode: "none", roundTimeLimitMs: undefined }
+                                : { roundTimerMode: "fixed", roundTimeLimitMs: Number(value) * 1000 },
+                            );
+                          }}
+                          disabled={privateLobby.busy}
+                          className="h-[40px] rounded-[10px] border border-white/10 bg-[#101a20]/90 px-3 text-[13px] font-bold text-white outline-none transition focus:border-[#2ad18f]/60 disabled:opacity-50"
+                        >
+                          {CLOCK_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[#6b8b80]">
+                          Pressure
+                        </span>
+                        <select
+                          value={lobbyPressureOn ? "15" : "none"}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            saveLobbyConfig({
+                              pressureTimeLimitMs: value === "15" ? 15000 : undefined,
+                            });
+                          }}
+                          disabled={privateLobby.busy}
+                          className="h-[40px] rounded-[10px] border border-white/10 bg-[#101a20]/90 px-3 text-[13px] font-bold text-white outline-none transition focus:border-[#2ad18f]/60 disabled:opacity-50"
+                        >
+                          {PRESSURE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                   ) : null}
                 </div>
@@ -872,28 +1056,46 @@ export default function LobbyScreen({
                   return (
                     <div
                       key={member.userId}
-                      className="flex min-h-[72px] flex-col gap-3 rounded-[16px] border border-white/10 bg-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                      className={`flex min-h-[72px] flex-col gap-3 rounded-[16px] border border-white/10 bg-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${!member.connected ? 'opacity-50' : ''}`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-[16px] font-extrabold text-white">
-                            {member.displayName || member.userId}
-                          </p>
+	                      <div className="min-w-0">
+	                        <div className="flex items-center gap-2">
+	                          <p className="truncate text-[16px] font-extrabold text-white">
+	                            {member.displayName || member.userId}
+	                          </p>
                           {isLeader ? (
                             <span className="inline-flex items-center rounded-full bg-[#22d385]/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.1em] text-[#77f0be]">
                               <Crown className="mr-1" size={12} />
                               Leader
                             </span>
-                          ) : null}
-                        </div>
-                        <p
-                          className={`mt-1 text-[12px] font-semibold uppercase tracking-[0.12em] ${member.connected ? "text-[#77f0be]" : "text-[#f0c777]"
-                            }`}
-                        >
-                          {isSelf ? "You · " : ""}
-                          {lobbyStatus}
-                        </p>
+	                          ) : null}
+	                        </div>
+	                        <p className="mt-1 text-[12px] font-semibold text-[#a9bfd4]">
+	                          {isSelf ? `You · ${lobbyStatus}` : lobbyStatus}
+	                        </p>
+	                        {lobbyMode === "team_duel" ? (
+	                          <p className="mt-1 text-[12px] font-semibold uppercase tracking-[0.12em]">
+                            <span className={lobbyTeamTextClass(member.teamId)}>
+                              {lobbyTeamLabel(member.teamId)}
+                            </span>
+                          </p>
+                        ) : null}
                       </div>
+                      {lobbyMode === "team_duel" && isSelf && privateLobby.snapshot?.state === "open" ? (
+                        <div className="flex gap-2">
+                          {(["a", "b"] as const).map((teamId) => (
+                            <button
+                              key={teamId}
+                              type="button"
+                              onClick={() => void switchPrivateLobbyTeam(teamId)}
+                              disabled={privateLobby.busy || (member.teamId || "a") === teamId}
+                              className={`inline-flex min-h-[36px] items-center rounded-[10px] px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] transition disabled:opacity-50 ${lobbyTeamPillClass(teamId, (member.teamId || "a") === teamId)}`}
+                            >
+                              {lobbyTeamLabel(teamId)}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       {privateLobby.isOwner && !isSelf ? (
                         <div className="flex flex-wrap gap-2">
                           <button
@@ -934,7 +1136,7 @@ export default function LobbyScreen({
                 ) : (
                   <Play className="mr-2" size={18} fill="currentColor" />
                 )}
-                Start Duel
+                {lobbyMode === "team_duel" ? "Start Team Duel" : lobbyMode === "free_for_all" ? "Start FFA" : "Start Duel"}
               </button>
             ) : privateLobby.isMember ? (
               <div className="rounded-[16px] border border-white/10 bg-white/[0.06] px-4 py-3 text-center text-sm font-semibold text-[#a9bfd4]">
@@ -1251,6 +1453,37 @@ export default function LobbyScreen({
     );
   };
 
+  const renderSignInModal = () => (
+    <LobbyModalShell title="Sign In" onClose={() => setOpenModal(null)}>
+      <div className="space-y-3">
+        {googleProviderButton ? (
+          <div
+            onClick={() => setOpenModal(null)}
+            className="flex justify-center"
+          >
+            {googleProviderButton}
+          </div>
+        ) : null}
+        {discordProviderButton ? (
+          <div
+            onClick={() => setOpenModal(null)}
+            className="flex justify-center"
+          >
+            {discordProviderButton}
+          </div>
+        ) : null}
+        {!googleProviderButton && !discordProviderButton ? (
+          <div className="flex justify-center">{signInButton}</div>
+        ) : null}
+        {authError ? (
+          <p className="text-center text-xs font-semibold text-red-300">
+            {authError}
+          </p>
+        ) : null}
+      </div>
+    </LobbyModalShell>
+  );
+
   const renderProfileModal = () => (
     <LobbyModalShell
       title="Profile"
@@ -1260,20 +1493,13 @@ export default function LobbyScreen({
       }}
     >
       <div className="glass-panel flex items-center gap-4 rounded-2xl p-5">
-        <div className="h-14 w-14 overflow-hidden rounded-full border border-white/20 bg-[#162130]">
-          {userAvatar && !avatarLoadFailed ? (
-            <img
-              src={userAvatar}
-              alt="Avatar"
-              className="h-full w-full object-cover"
-              onError={() => setAvatarLoadFailed(true)}
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[#223d32] text-xl font-bold text-white">
-              {userAvatarFallback}
-            </div>
-          )}
-        </div>
+        <AvatarBadge
+          avatarUrl={userAvatar}
+          fallback={userAvatarFallback}
+          alt={displayName || userEmail || "Guest"}
+          size="lg"
+          className="border-white/20 bg-[#162130]"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             {isEditingProfileName && !isGuest ? (
@@ -1301,9 +1527,13 @@ export default function LobbyScreen({
                 autoFocus
               />
             ) : (
-              <p className="truncate text-xl font-bold text-white">
-                {displayName || userEmail || "Guest"}
-              </p>
+              <PlayerNameWithBadge
+                name={displayName || userEmail || "Guest"}
+                isAdmin={isAdmin}
+                selectedBadge={null}
+                nameClassName="text-xl font-bold text-white"
+                wrapperClassName="min-w-0"
+              />
             )}
             {userId && !isGuest ? (
               <button
@@ -1337,9 +1567,12 @@ export default function LobbyScreen({
               </button>
             ) : null}
           </div>
-          <p className="text-sm text-[#a9bfd4]">
-            {userEmail || "Offline Mode"}
-          </p>
+          {isGuest || selectedBadge ? (
+            <div className="mt-1 flex items-center gap-2 text-sm text-[#a9bfd4]">
+              {isGuest ? <span>Guest profile</span> : null}
+              <PlayerBadge badge={selectedBadge} size="sm" />
+            </div>
+          ) : null}
           {nicknameError ? (
             <p className="mt-2 text-xs font-semibold text-red-400">
               {nicknameError}
@@ -1348,59 +1581,222 @@ export default function LobbyScreen({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 text-center uppercase tracking-wider text-[#a9bfd4] sm:grid-cols-3">
-        <div className="glass-panel rounded-xl p-3 py-4">
-          <p className="text-[11px] font-bold">MMR</p>
-          <p className="mt-1.5 text-2xl font-black text-white">{mmr}</p>
-        </div>
-        <div className="glass-panel rounded-xl p-3 py-4">
-          <p className="text-[11px] font-bold">Games</p>
-          <p className="mt-1.5 text-2xl font-black text-white">{gamesPlayed}</p>
-        </div>
-        <div className="glass-panel rounded-xl p-3 py-4">
-          <p className="text-[11px] font-bold">Winrate</p>
-          <p className="mt-1.5 text-2xl font-black text-white">{winsPct}%</p>
-        </div>
+      <div className="mt-4 grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-black/20 p-1">
+        {profileTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setProfileTab(tab.id)}
+            className={`min-h-[38px] rounded-xl text-[11px] font-black uppercase tracking-[0.12em] transition ${profileTab === tab.id ? "bg-[#2ad18f] text-[#06130d]" : "text-[#a9bfd4] hover:bg-white/10 hover:text-white"}`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
-      {userId && recoveryAvailable && googleRecoveryButton ? (
-        <div className="glass-panel mt-6 rounded-xl p-4">
-          <p className="mb-2 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
-            Account Recovery
-          </p>
-          <p className="mb-3 text-center text-xs leading-5 text-[#a9bfd4]">
-            Replace this Discord account with your old Google account. Progress
-            on this current Discord account will be deleted.
-          </p>
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "This will replace the current Discord account with your old Google account and delete progress on this current Discord account. Continue?",
-                  )
-                ) {
-                  onGoogleRecovery();
-                }
-              }}
-              disabled={authLoading}
-              className="w-full rounded-xl border border-red-500/30 bg-red-500/10 py-3 text-[12px] font-bold uppercase tracking-wider text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
-            >
-              {authLoading ? "Opening Google..." : "Replace with old account"}
-            </button>
+
+      {profileTab === "stats" ? (
+        <div className="mt-4 grid grid-cols-1 gap-3 text-center uppercase tracking-wider text-[#a9bfd4] sm:grid-cols-3">
+          <div className="glass-panel rounded-xl p-3 py-4">
+            <p className="text-[11px] font-bold">MMR</p>
+            <p className="mt-1.5 text-2xl font-black text-white">{mmr}</p>
+          </div>
+          <div className="glass-panel rounded-xl p-3 py-4">
+            <p className="text-[11px] font-bold">Games</p>
+            <p className="mt-1.5 text-2xl font-black text-white">{gamesPlayed}</p>
+          </div>
+          <div className="glass-panel rounded-xl p-3 py-4">
+            <p className="text-[11px] font-bold">Winrate</p>
+            <p className="mt-1.5 text-2xl font-black text-white">{winsPct}%</p>
           </div>
         </div>
       ) : null}
-      {userId && !userEmail ? (
+
+      {profileTab === "badges" ? (
+        <div className="mt-4">
+          <div className="grid grid-cols-4 gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 sm:grid-cols-6">
+            {badges.map((badge) => {
+              const owned = !!badge.owned;
+              const selected = selectedBadge?.id === badge.id;
+              const focused = focusedBadge?.id === badge.id;
+              return (
+                <button
+                  key={badge.id}
+                  type="button"
+                  onMouseEnter={() => setHoveredBadgeId(badge.id)}
+                  onMouseLeave={() => setHoveredBadgeId("")}
+                  onFocus={() => setHoveredBadgeId(badge.id)}
+                  onBlur={() => setHoveredBadgeId("")}
+                  onClick={() => {
+                    setInspectedBadgeId(badge.id);
+                    if (owned) void onSelectBadge(selected ? "" : badge.id);
+                  }}
+                  className={`relative flex aspect-square items-center justify-center rounded-2xl border transition ${focused ? "border-[#2ad18f]/70 bg-[#123f2d]/45" : "border-white/10 bg-white/[0.04] hover:bg-white/[0.08]"} ${selected ? "shadow-[0_0_24px_rgba(42,209,143,0.24)]" : ""}`}
+                  aria-label={badge.label}
+                >
+                  <PlayerBadge badge={badge} size="lg" muted={!owned} showTooltip={false} />
+                  {selected ? (
+                    <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[#2ad18f] shadow-[0_0_10px_rgba(42,209,143,0.8)]" />
+                  ) : null}
+                  {!owned ? (
+                    <span className="absolute inset-x-2 bottom-1.5 rounded-full bg-black/40 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-white/45">
+                      Locked
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          {focusedBadge ? (
+            <div className="mt-3 h-[112px] rounded-2xl border border-white/10 bg-black/25 p-4">
+              <div className="flex h-full items-start justify-between gap-3 overflow-hidden">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-white">{focusedBadge.label}</p>
+                  <p className="mt-1 max-h-[48px] overflow-hidden text-xs leading-relaxed text-[#a9bfd4]">
+                    {focusedBadge.description}
+                  </p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${focusedBadge.owned ? "bg-[#2ad18f]/18 text-[#8ff0c2]" : "bg-white/[0.06] text-white/45"}`}>
+                  {selectedBadge?.id === focusedBadge.id
+                    ? "Shown"
+                    : focusedBadge.owned
+                      ? "Available"
+                      : "Locked"}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {profileTab === "account" && userId && !isGuest ? (
+        <div className="glass-panel mt-6 rounded-xl p-4">
+          <div className="mb-4 rounded-xl border border-white/10 bg-black/15 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b8b80]">
+              Email
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-white">
+              {userEmail || "No email on this account"}
+            </p>
+          </div>
+          <p className="mb-3 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
+            Sign-in Methods
+          </p>
+          <div className="space-y-3">
+            {showGoogleButton ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/15 p-3">
+                <div>
+                  <p className="text-sm font-bold text-white">Google</p>
+                  <p className="text-xs text-[#a9bfd4]">
+                    {hasGoogleProvider ? "Linked" : "Not linked"}
+                  </p>
+                </div>
+                {hasGoogleProvider ? (
+                  <button
+                    type="button"
+                    onClick={() => onUnlinkAuthProvider("google")}
+                    disabled={authLoading || linkedProviderCount <= 1}
+                    className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Unlink
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onGoogleSignIn}
+                    disabled={authLoading}
+                    className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Link
+                  </button>
+                )}
+              </div>
+            ) : null}
+            {showDiscordButton ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/15 p-3">
+                <div>
+                  <p className="text-sm font-bold text-white">Discord</p>
+                  <p className="text-xs text-[#a9bfd4]">
+                    {hasDiscordProvider ? "Linked" : "Not linked"}
+                  </p>
+                </div>
+                {hasDiscordProvider ? (
+                  <button
+                    type="button"
+                    onClick={() => onUnlinkAuthProvider("discord")}
+                    disabled={authLoading || linkedProviderCount <= 1}
+                    className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Unlink
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onDiscordSignIn}
+                    disabled={authLoading}
+                    className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Link
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </div>
+          {authError ? (
+            <p className="mt-3 text-center text-xs font-semibold text-red-300">
+              {authError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {profileTab === "account" && userId && isGuest ? (
         <div className="glass-panel mt-6 rounded-xl p-4">
           <p className="mb-3 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
             Save Progress
           </p>
-          <div className="flex justify-center">{discordSignInButton}</div>
+          <div className="flex justify-center">{signInButton}</div>
         </div>
       ) : null}
 
-      {userId ? (
+      {profileTab === "account" && userId ? (
+        <div className="mt-6 rounded-xl border border-red-500/25 bg-red-950/20 p-4">
+          <p className="text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-red-200">
+            Delete Account
+          </p>
+          <p className="mt-2 text-center text-xs leading-relaxed text-red-100/70">
+            This signs you out, removes sign-in links, and clears your profile.
+            Match and moderation records are retained.
+          </p>
+          <input
+            value={deleteConfirmation}
+            onChange={(event) => setDeleteConfirmation(event.target.value)}
+            placeholder="Type DELETE"
+            className="mt-4 w-full rounded-xl border border-red-300/20 bg-black/25 px-3 py-2 text-center text-sm font-bold tracking-[0.18em] text-white outline-none transition placeholder:text-red-100/35 focus:border-red-300/50"
+          />
+          <button
+            type="button"
+            onClick={async () => {
+              if (deleteConfirmation !== "DELETE") return;
+              try {
+                await onDeleteAccount();
+                setOpenModal(null);
+              } catch {
+                // The model surfaces the failure in the profile modal.
+              }
+            }}
+            disabled={authLoading || deleteConfirmation !== "DELETE"}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/15 py-3 text-[13px] font-bold uppercase tracking-wider text-red-100 transition hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {authLoading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Trash2 size={16} />
+            )}
+            Delete Account
+          </button>
+        </div>
+      ) : null}
+
+      {profileTab === "account" && userId ? (
         <button
           type="button"
           onClick={() => {
@@ -1461,7 +1857,7 @@ export default function LobbyScreen({
           className="absolute inset-0"
           style={{
             backgroundImage:
-              "linear-gradient(rgba(34, 61, 50, 0.58), rgba(0, 0, 0, 1.0)), url('/bg.jpg')",
+              "linear-gradient(rgba(18, 56, 41, 0.4), rgba(0, 0, 0, 0.9)), url('/bg2.jpg')",
             backgroundPosition: "center",
             backgroundRepeat: "no-repeat",
             backgroundSize: "cover",
@@ -1473,6 +1869,7 @@ export default function LobbyScreen({
         {openModal === "help" && renderHelpModal()}
         {openModal === "profile" && renderProfileModal()}
         {openModal === "invite" && renderInviteLobbyModal()}
+        {openModal === "signin" && renderSignInModal()}
       </AnimatePresence>
 
       {/* Header */}
@@ -1524,38 +1921,29 @@ export default function LobbyScreen({
               }}
             >
               <div className="flex min-w-0 max-w-[7.5rem] flex-col items-end justify-center sm:max-w-none">
-                <span className="truncate text-[12px] font-bold leading-tight text-white transition-colors group-hover:text-emerald-100 sm:text-[15px]">
-                  {displayName || userEmail || "Player"}
-                </span>
+            <PlayerNameWithBadge
+              name={displayName || userEmail || "Player"}
+              isAdmin={isAdmin}
+              selectedBadge={null}
+              nameClassName="text-[12px] font-bold leading-tight text-white transition-colors group-hover:text-emerald-100 sm:text-[15px]"
+            />
                 <div className="mt-0.5 flex items-center text-[10px] font-bold text-[#2ad18f] sm:text-[12px]">
-                  <svg
-                    className="mr-1 h-3 w-3"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <path d="M19 4h-2V2H7v2H5C3.34 4 2 5.34 2 7v3c0 1.9 1.25 3.51 3 4.15V15c0 1.66 1.34 3 3 3h4c0 1.25-.84 2.33-2 2.8v2.2L12 24l2-1v-2.2c-1.16-.47-2-1.55-2-2.8h4c1.66 0 3-1.34 3-3v-.85c1.75-.64 3-2.25 3-4.15V7c0-1.66-1.34-3-3-3zM5 12c-.55 0-1-.45-1-1V7c0-.55.45-1 1-1h2v6H5zm14-1c0 .55-.45 1-1 1h-2V6h2c.55 0 1 .45 1 1v4z" />
-                  </svg>
+                  <RatingTrophyIcon className="mr-1 h-3 w-3" />
                   {mmr}
+                  <PlayerBadge badge={selectedBadge} size="sm" className="ml-1" />
                 </div>
               </div>
-              <div className="relative h-9 w-9 flex-shrink-0 overflow-hidden rounded-full border-[1.5px] border-white/20 bg-[#162130] transition-colors group-hover:border-white/40 sm:h-[42px] sm:w-[42px]">
-                {userAvatar && !avatarLoadFailed ? (
-                  <img
-                    src={userAvatar}
-                    alt="User avatar"
-                    className="absolute inset-0 h-full w-full object-cover"
-                    onError={() => setAvatarLoadFailed(true)}
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center bg-[#1e3b2f] font-bold text-white">
-                    {userAvatarFallback}
-                  </div>
-                )}
-              </div>
+              <AvatarBadge
+                avatarUrl={userAvatar}
+                fallback={userAvatarFallback}
+                alt={displayName || userEmail || "Player"}
+                size="sm"
+                className="h-9 w-9 border-[1.5px] border-white/20 bg-[#162130] transition-colors group-hover:border-white/40 sm:h-[42px] sm:w-[42px]"
+              />
             </div>
           ) : (
             <div className="pointer-events-auto justify-self-end">
-              {discordSignInButton}
+              {signInButton}
             </div>
           )}
         </div>
@@ -1600,15 +1988,6 @@ export default function LobbyScreen({
 
       {/* Main Content Area */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-start px-4 pb-10 pt-4 pointer-events-none sm:px-6 sm:pb-12 sm:pt-8">
-        {authMigrationRequired ? (
-          <div className="mb-4 flex w-full max-w-[1160px] flex-col items-center gap-3 rounded-[18px] border border-[#5865f2]/30 bg-[#5865f2]/12 px-4 py-4 text-center text-sm font-semibold leading-6 text-[#dbe4ff] shadow-[0_14px_40px_rgba(0,0,0,0.22)] pointer-events-auto sm:flex-row sm:justify-between sm:px-5 sm:text-left">
-            <span>
-              GeoDuels now uses Discord sign-in. Connect Discord to keep your
-              nickname, MMR, stats, and match history.
-            </span>
-            {discordSignInButton}
-          </div>
-        ) : null}
         {privateLobbyErrorNotice}
 
         <AnimatePresence mode="popLayout">
@@ -1777,7 +2156,8 @@ export default function LobbyScreen({
               <div className="flex w-full max-w-[480px] flex-col gap-5 lg:sticky lg:top-8 lg:max-w-none">
                 {onlineStatusCard}
                 {newsPanel}
-                {discordCard}
+                {donateCard}
+                {socialLinksCard}
               </div>
             </motion.div>
           )}
@@ -1802,14 +2182,6 @@ export default function LobbyScreen({
             </motion.div>
           )}
         </AnimatePresence>
-
-        {!privateLobbyActive && TABS[activeTab] === "PLAY" ? (
-          <AdSenseBanner
-            clientId={runtimeConfig.adsenseClientId}
-            slot={runtimeConfig.adsensePlaySlot}
-            className="mt-6"
-          />
-        ) : null}
 
         {!privateLobbyActive ? (
           <>

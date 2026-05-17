@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"geoduels/pkg/contracts"
@@ -30,20 +29,23 @@ const (
 )
 
 type Profile struct {
-	UserID            string  `json:"userId"`
-	DisplayName       string  `json:"displayName"`
-	AvatarURL         string  `json:"avatarUrl,omitempty"`
-	MMR               int     `json:"mmr"`
-	RatingRD          float64 `json:"ratingRd,omitempty"`
-	GamesPlayed       int     `json:"gamesPlayed"`
-	Wins              int     `json:"wins"`
-	RankedGamesPlayed int     `json:"rankedGamesPlayed"`
-	RankedWins        int     `json:"rankedWins"`
-	IsGuest           bool    `json:"isGuest"`
-	IsAdmin           bool    `json:"isAdmin"`
-	IsModerator       bool    `json:"isModerator"`
-	IsBanned          bool    `json:"isBanned"`
-	BanReason         string  `json:"banReason,omitempty"`
+	UserID            string                  `json:"userId"`
+	DisplayName       string                  `json:"displayName"`
+	AvatarURL         string                  `json:"avatarUrl,omitempty"`
+	MMR               int                     `json:"mmr"`
+	RatingRD          float64                 `json:"ratingRd,omitempty"`
+	SeasonID          string                  `json:"seasonId,omitempty"`
+	GamesPlayed       int                     `json:"gamesPlayed"`
+	Wins              int                     `json:"wins"`
+	RankedGamesPlayed int                     `json:"rankedGamesPlayed"`
+	RankedWins        int                     `json:"rankedWins"`
+	IsGuest           bool                    `json:"isGuest"`
+	IsAdmin           bool                    `json:"isAdmin"`
+	IsModerator       bool                    `json:"isModerator"`
+	IsBanned          bool                    `json:"isBanned"`
+	BanReason         string                  `json:"banReason,omitempty"`
+	Badges            []contracts.PlayerBadge `json:"badges,omitempty"`
+	SelectedBadge     *contracts.PlayerBadge  `json:"selectedBadge,omitempty"`
 }
 
 type LeaderboardEntry struct {
@@ -180,6 +182,17 @@ type ModerationSettings struct {
 	DiscordWebhookURL string `json:"discordWebhookUrl"`
 }
 
+type RankedSeasonSettings struct {
+	ActiveSeasonID string `json:"activeSeasonId"`
+}
+
+type RankedSeasonRolloverResult struct {
+	PreviousSeasonID string `json:"previousSeasonId"`
+	ActiveSeasonID   string `json:"activeSeasonId"`
+	BadgesAwarded    int    `json:"badgesAwarded"`
+	PlayersSeeded    int    `json:"playersSeeded"`
+}
+
 type RefreshTokenRecord struct {
 	ID               string
 	UserID           string
@@ -209,10 +222,12 @@ type MatchChatMessage = contracts.MatchChatMessage
 
 type Store interface {
 	UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error)
+	LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error)
 	UpsertGoogleIdentity(googleSub, email, googleName, avatarURL, linkUserID string) (Identity, error)
 	ProviderIdentityExists(provider, providerUserID string) (bool, error)
 	GoogleIdentityExists(googleSub string) (bool, error)
-	MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (Identity, error)
+	IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error)
+	UnlinkProviderIdentity(userID, provider string) (Identity, error)
 	CreateGuestIdentity() (Identity, error)
 	GetIdentity(sub string) (Identity, error)
 	CompleteOnboarding(sub, email, displayName string) error
@@ -227,14 +242,18 @@ type Store interface {
 	SetLobbyChangelog(content LobbyChangelogContent) error
 	GetModerationSettings() (ModerationSettings, error)
 	SetModerationSettings(settings ModerationSettings) error
+	GetRankedSeasonSettings() (RankedSeasonSettings, error)
+	RolloverRankedSeason(nextSeasonID string) (RankedSeasonRolloverResult, error)
 	ActivateMapRevision(mapKey, displayName string, dataset []byte) (MapRevisionSummary, error)
 	CreateAuthSession(userID, refreshTokenHash string, expiresAt time.Time, params AuthSessionParams) (RefreshTokenRecord, error)
 	GetAuthSessionByRefreshToken(hash string) (RefreshTokenRecord, bool, error)
 	RotateAuthSession(sessionID, currentHash, nextHash string, expiresAt time.Time, usedAt time.Time) (RefreshTokenRecord, bool, error)
 	RevokeAuthSession(sessionID string) error
 	RevokeAuthSessionsForUser(userID string) error
+	DeleteAccount(userID string) error
 	UpsertUser(userID, email, displayName string) error
 	GetProfile(userID string) (Profile, error)
+	UpdateSelectedBadge(userID, badgeID string) (Profile, error)
 	ListLeaderboard(mode, seasonID string, limit, offset int) ([]LeaderboardEntry, error)
 	GetLeaderboardOverview(userID, mode, seasonID string, limit int) (LeaderboardOverview, error)
 	RecordMatchResult(snap contracts.MatchSnapshot) error
@@ -266,11 +285,13 @@ type Store interface {
 	ListOpenLobbyIDs() ([]string, error)
 	CloseInactiveOpenLobbies(lobbyIDs []string, inactiveFor time.Duration) (int64, error)
 	CreateLobby(ownerUserID string, mode contracts.MatchMode, mapScope string, ttl time.Duration) (contracts.LobbySnapshot, error)
+	SetLobbyMode(lobbyID string, mode contracts.MatchMode) error
 	GetLobbyByID(lobbyID string) (contracts.LobbySnapshot, bool, error)
 	GetLobbyByInviteCode(inviteCode string) (contracts.LobbySnapshot, bool, error)
 	GetLobbyByMatchID(matchID string) (contracts.LobbySnapshot, bool, error)
 	JoinLobby(lobbyID, userID string) (contracts.LobbySnapshot, error)
 	LeaveLobby(lobbyID, userID string) (contracts.LobbySnapshot, error)
+	SetLobbyMemberTeam(lobbyID, userID, teamID string) (contracts.LobbySnapshot, error)
 	KickLobbyMember(lobbyID, ownerUserID, targetUserID string) (contracts.LobbySnapshot, error)
 	TransferLobbyOwner(lobbyID, ownerUserID, targetUserID string) (contracts.LobbySnapshot, error)
 	MarkLobbyInMatch(lobbyID, matchID string) (contracts.LobbySnapshot, error)
@@ -330,12 +351,17 @@ func chooseGoogleIdentityUser(existingGoogleUserID, existingEmailUserID, existin
 }
 
 func providerUsesAccountEmail(provider string) bool {
-	return provider == IdentityProviderGoogle
+	return provider == IdentityProviderGoogle || provider == IdentityProviderDiscord
+}
+
+func isSyntheticOAuthEmail(email string) bool {
+	email = strings.TrimSpace(strings.ToLower(email))
+	return strings.HasSuffix(email, "@oauth.invalid") || strings.HasSuffix(email, ".oauth.invalid")
 }
 
 func providerAccountEmail(provider, email string) any {
 	email = strings.TrimSpace(email)
-	if providerUsesAccountEmail(provider) && email != "" {
+	if providerUsesAccountEmail(provider) && email != "" && !isSyntheticOAuthEmail(email) {
 		return email
 	}
 	return nil
@@ -359,6 +385,11 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	if providerName == "" {
 		providerName = providerUserID
 	}
+	if banned, _, err := s.IsProviderIdentityBanned(provider, providerUserID); err != nil {
+		return Identity{}, err
+	} else if banned {
+		return Identity{}, errors.New("provider identity banned")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
@@ -366,6 +397,10 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 		return Identity{}, err
 	}
 	defer tx.Rollback(ctx)
+	seasonID, err := activeSeasonIDTx(ctx, tx)
+	if err != nil {
+		return Identity{}, err
+	}
 
 	var existingProviderUserID string
 	row := tx.QueryRow(ctx, `
@@ -378,7 +413,7 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 	}
 	var existingEmailUserID string
 	var existingEmailAccountType string
-	if providerUsesAccountEmail(provider) && existingProviderUserID == "" && email != "" && !strings.HasSuffix(email, "@oauth.invalid") {
+	if providerUsesAccountEmail(provider) && existingProviderUserID == "" && email != "" && !isSyntheticOAuthEmail(email) {
 		row = tx.QueryRow(ctx, `
 			select id, account_type
 			from users
@@ -456,11 +491,19 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 			return Identity{}, err
 		}
 	}
+	if err := recordUserIdentityHistory(ctx, tx, userID, provider, providerUserID, email, providerName, avatarURL); err != nil {
+		return Identity{}, err
+	}
+	if provider == IdentityProviderDiscord {
+		if err := awardDiscordMemberBadgeTx(ctx, tx, userID); err != nil {
+			return Identity{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		insert into ranks (user_id, mode, mmr, season_id)
 		values ($1, $2, $4, $3)
 		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, defaultSeasonID, initialMMR); err != nil {
+	`, userID, modeDuel, seasonID, initialMMR); err != nil {
 		return Identity{}, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -474,13 +517,151 @@ func (s *pgStore) UpsertProviderIdentity(provider, providerUserID, email, provid
 		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
 		values ($1, $2, $3, 0, 0)
 		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, defaultSeasonID); err != nil {
+	`, userID, modeDuel, seasonID); err != nil {
 		return Identity{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Identity{}, err
 	}
 	return s.GetIdentity(userID)
+}
+
+func (s *pgStore) LinkProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	providerUserID = strings.TrimSpace(providerUserID)
+	linkUserID = strings.TrimSpace(linkUserID)
+	if provider == "" {
+		return Identity{}, errors.New("provider required")
+	}
+	if providerUserID == "" {
+		return Identity{}, errors.New("provider subject required")
+	}
+	if linkUserID == "" {
+		return Identity{}, errors.New("link user required")
+	}
+	if email == "" {
+		email = providerUserID + "@oauth.invalid"
+	}
+	if providerName == "" {
+		providerName = providerUserID
+	}
+	if banned, _, err := s.IsProviderIdentityBanned(provider, providerUserID); err != nil {
+		return Identity{}, err
+	} else if banned {
+		return Identity{}, errors.New("provider identity banned")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer tx.Rollback(ctx)
+	seasonID, err := activeSeasonIDTx(ctx, tx)
+	if err != nil {
+		return Identity{}, err
+	}
+
+	var linkAccountType string
+	if err := tx.QueryRow(ctx, `
+		select account_type
+		from users
+		where id = $1
+	`, linkUserID).Scan(&linkAccountType); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Identity{}, errors.New("link user not found")
+		}
+		return Identity{}, err
+	}
+
+	var existingProviderUserID string
+	err = tx.QueryRow(ctx, `
+		select user_id
+		from user_identities
+		where provider = $1 and provider_user_id = $2
+	`, provider, providerUserID).Scan(&existingProviderUserID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Identity{}, err
+	}
+	if existingProviderUserID != "" && existingProviderUserID != linkUserID {
+		return Identity{}, errors.New("provider identity already linked")
+	}
+	if providerUsesAccountEmail(provider) && email != "" && !isSyntheticOAuthEmail(email) {
+		var existingEmailUserID string
+		err = tx.QueryRow(ctx, `
+			select id
+			from users
+			where lower(email) = lower($1)
+			limit 1
+		`, email).Scan(&existingEmailUserID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Identity{}, err
+		}
+		if existingEmailUserID != "" && existingEmailUserID != linkUserID {
+			return Identity{}, errors.New("provider identity already linked")
+		}
+	}
+
+	onboardedAt := providerOnboardedAt(linkAccountType == "guest")
+	userEmail := providerAccountEmail(provider, email)
+	if _, err := tx.Exec(ctx, `
+		insert into users (id, email, display_name, avatar_url, onboarded_at, account_type)
+		values ($1, $2, $3, $4, $5, 'registered')
+		on conflict (id) do update set
+			email = coalesce(excluded.email, users.email),
+			display_name = case
+				when users.account_type = 'guest' then excluded.display_name
+				when users.onboarded_at is not null and nullif(users.display_name, '') is not null then users.display_name
+				else excluded.display_name
+			end,
+			avatar_url = excluded.avatar_url,
+			onboarded_at = coalesce(users.onboarded_at, excluded.onboarded_at),
+			account_type = 'registered'
+	`, linkUserID, userEmail, providerName, nullable(avatarURL), onboardedAt); err != nil {
+		return Identity{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into user_identities(user_id, provider, provider_user_id, email, provider_name, avatar_url, last_seen_at)
+		values($1, $2, $3, $4, $5, $6, now())
+		on conflict (user_id, provider) do update set
+			provider_user_id = excluded.provider_user_id,
+			email = excluded.email,
+			provider_name = excluded.provider_name,
+			avatar_url = case
+				when excluded.avatar_url is null then user_identities.avatar_url
+				when excluded.avatar_url = '' then user_identities.avatar_url
+				else excluded.avatar_url
+			end,
+			last_seen_at = now()
+	`, linkUserID, provider, providerUserID, email, providerName, nullable(avatarURL)); err != nil {
+		return Identity{}, err
+	}
+	if err := recordUserIdentityHistory(ctx, tx, linkUserID, provider, providerUserID, email, providerName, avatarURL); err != nil {
+		return Identity{}, err
+	}
+	if provider == IdentityProviderDiscord {
+		if err := awardDiscordMemberBadgeTx(ctx, tx, linkUserID); err != nil {
+			return Identity{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into ranks (user_id, mode, mmr, season_id)
+		values ($1, $2, $4, $3)
+		on conflict (user_id, mode, season_id) do nothing
+	`, linkUserID, modeDuel, seasonID, initialMMR); err != nil {
+		return Identity{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
+		values ($1, $2, $3, 0, 0)
+		on conflict (user_id, mode, season_id) do nothing
+	`, linkUserID, modeDuel, seasonID); err != nil {
+		return Identity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Identity{}, err
+	}
+	return s.GetIdentity(linkUserID)
 }
 
 func (s *pgStore) GoogleIdentityExists(googleSub string) (bool, error) {
@@ -506,11 +687,55 @@ func (s *pgStore) ProviderIdentityExists(provider, providerUserID string) (bool,
 	return exists, nil
 }
 
-func (s *pgStore) MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub string, deleteCurrent bool) (Identity, error) {
-	currentUserID = strings.TrimSpace(currentUserID)
-	googleSub = strings.TrimSpace(googleSub)
-	if currentUserID == "" || googleSub == "" {
-		return Identity{}, errors.New("current user and google subject required")
+func (s *pgStore) IsProviderIdentityBanned(provider, providerUserID string) (bool, string, error) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	providerUserID = strings.TrimSpace(providerUserID)
+	if provider == "" || providerUserID == "" {
+		return false, "", errors.New("provider and subject required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	var reason string
+	err := s.pool.QueryRow(ctx, `
+		select coalesce(reason, '')
+		from oauth_identity_bans
+		where provider = $1
+		  and provider_user_id = $2
+		  and revoked_at is null
+		limit 1
+	`, provider, providerUserID).Scan(&reason)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+	return true, reason, nil
+}
+
+func recordUserIdentityHistory(ctx context.Context, tx pgx.Tx, userID, provider, providerUserID, email, providerName, avatarURL string) error {
+	_, err := tx.Exec(ctx, `
+		insert into user_identity_history(user_id, provider, provider_user_id, email, provider_name, avatar_url, first_seen_at, last_seen_at, deleted_at)
+		values($1, $2, $3, $4, $5, $6, now(), now(), null)
+		on conflict (user_id, provider, provider_user_id) do update set
+			email = excluded.email,
+			provider_name = excluded.provider_name,
+			avatar_url = case
+				when excluded.avatar_url is null then user_identity_history.avatar_url
+				when excluded.avatar_url = '' then user_identity_history.avatar_url
+				else excluded.avatar_url
+			end,
+			last_seen_at = now(),
+			deleted_at = null
+	`, userID, provider, providerUserID, email, providerName, nullable(avatarURL))
+	return err
+}
+
+func (s *pgStore) UnlinkProviderIdentity(userID, provider string) (Identity, error) {
+	userID = strings.TrimSpace(userID)
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if userID == "" || provider == "" {
+		return Identity{}, errors.New("user and provider required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -520,132 +745,53 @@ func (s *pgStore) MigrateGoogleIdentityToCurrentDiscord(currentUserID, googleSub
 	}
 	defer tx.Rollback(ctx)
 
-	var targetUserID string
+	var providerCount int
 	if err := tx.QueryRow(ctx, `
-		select user_id
+		select count(*)
 		from user_identities
-		where provider = 'google' and provider_user_id = $1
-	`, googleSub).Scan(&targetUserID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Identity{}, errors.New("google identity not found")
-		}
+		where user_id = $1
+	`, userID).Scan(&providerCount); err != nil {
 		return Identity{}, err
 	}
-	if targetUserID == currentUserID {
-		if err := tx.Commit(ctx); err != nil {
-			return Identity{}, err
-		}
-		return s.GetIdentity(targetUserID)
+	if providerCount <= 1 {
+		return Identity{}, errors.New("cannot unlink the last sign-in method")
 	}
-
-	var discordSub string
-	if err := tx.QueryRow(ctx, `
-		select provider_user_id
-		from user_identities
-		where user_id = $1 and provider = 'discord'
-	`, currentUserID).Scan(&discordSub); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Identity{}, errors.New("current discord identity not found")
-		}
+	tag, err := tx.Exec(ctx, `
+		delete from user_identities
+		where user_id = $1 and provider = $2
+	`, userID, provider)
+	if err != nil {
 		return Identity{}, err
 	}
-
-	var existingDiscordOwner string
-	err = tx.QueryRow(ctx, `
-		select user_id
-		from user_identities
-		where provider = 'discord' and provider_user_id = $1
-	`, discordSub).Scan(&existingDiscordOwner)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return Identity{}, err
-	}
-	if existingDiscordOwner != "" && existingDiscordOwner != currentUserID {
-		return Identity{}, errors.New("discord identity already linked")
-	}
-
-	var targetHasDiscord bool
-	if err := tx.QueryRow(ctx, `
-		select exists(
-			select 1 from user_identities
-			where user_id = $1 and provider = 'discord'
-		)
-	`, targetUserID).Scan(&targetHasDiscord); err != nil {
-		return Identity{}, err
-	}
-	if targetHasDiscord {
-		return Identity{}, errors.New("target account already has discord")
-	}
-	if !deleteCurrent {
-		var hasData bool
-		if err := tx.QueryRow(ctx, `
-			select exists(select 1 from match_players where user_id = $1)
-			    or exists(select 1 from ranked_stats where user_id = $1 and games_played > 0)
-			    or exists(select 1 from user_stats where user_id = $1 and games_played > 0)
-		`, currentUserID).Scan(&hasData); err != nil {
-			return Identity{}, err
-		}
-		if hasData {
-			return Identity{}, errors.New("current account has data; deletion confirmation required")
-		}
-	}
-
-	if _, err := tx.Exec(ctx, `
-		update user_identities
-		set user_id = $2, last_seen_at = now()
-		where user_id = $1 and provider = 'discord'
-	`, currentUserID, targetUserID); err != nil {
-		return Identity{}, err
-	}
-	if err := deleteUserOwnedRows(ctx, tx, currentUserID); err != nil {
-		return Identity{}, err
+	if tag.RowsAffected() == 0 {
+		return Identity{}, errors.New("provider is not linked")
 	}
 	if _, err := tx.Exec(ctx, `
-		update auth_sessions
-		set revoked_at = coalesce(revoked_at, now())
-		where user_id = $1 and revoked_at is null
-	`, currentUserID); err != nil {
+		update user_identity_history
+		set deleted_at = coalesce(deleted_at, now())
+		where user_id = $1
+		  and provider = $2
+		  and deleted_at is null
+	`, userID, provider); err != nil {
 		return Identity{}, err
 	}
-	if _, err := tx.Exec(ctx, `delete from users where id = $1`, currentUserID); err != nil {
-		return Identity{}, err
+	if provider == IdentityProviderGoogle {
+		if _, err := tx.Exec(ctx, `
+			update users
+			set email = null
+			where id = $1
+			  and not exists (
+				select 1 from user_identities
+				where user_id = $1 and provider = 'google'
+			  )
+		`, userID); err != nil {
+			return Identity{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Identity{}, err
 	}
-	return s.GetIdentity(targetUserID)
-}
-
-type txExecutor interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}
-
-func deleteUserOwnedRows(ctx context.Context, tx txExecutor, userID string) error {
-	statements := []string{
-		`delete from ranked_guess_events where user_id = $1`,
-		`delete from elo_refunds where user_id = $1 or cheater_user_id = $1`,
-		`delete from user_notifications where user_id = $1`,
-		`delete from match_chat_messages where sender_user_id = $1`,
-		`delete from moderation_reports where reporter_user_id = $1 or reported_user_id = $1`,
-		`delete from moderation_actions where target_user_id = $1`,
-		`delete from moderation_case_events where actor_user_id = $1`,
-		`delete from moderation_cases where target_user_id = $1`,
-		`delete from moderation_reporter_reputation where user_id = $1`,
-		`delete from match_round_guesses where user_id = $1`,
-		`delete from match_players where user_id = $1`,
-		`delete from lobby_members where user_id = $1`,
-		`delete from lobbies where owner_user_id = $1`,
-		`delete from ranked_stats where user_id = $1`,
-		`delete from ranks where user_id = $1`,
-		`delete from user_stats where user_id = $1`,
-		`delete from auth_sessions where user_id = $1`,
-		`delete from user_identities where user_id = $1`,
-	}
-	for _, stmt := range statements {
-		if _, err := tx.Exec(ctx, stmt, userID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.GetIdentity(userID)
 }
 
 func (s *pgStore) CreateGuestIdentity() (Identity, error) {
@@ -707,10 +853,8 @@ func (s *pgStore) GetIdentity(sub string) (Identity, error) {
 	}
 	out.ProviderName = out.GoogleName
 	out.LinkedProviders, _ = s.userProviders(ctx, sub)
-	hasGoogle := containsString(out.LinkedProviders, IdentityProviderGoogle)
-	hasDiscord := containsString(out.LinkedProviders, IdentityProviderDiscord)
-	out.AuthMigrationRequired = out.AccountType != "guest" && hasGoogle && !hasDiscord
-	out.RecoveryAvailable = hasDiscord && !hasGoogle
+	out.AuthMigrationRequired = false
+	out.RecoveryAvailable = false
 	return out, nil
 }
 
@@ -834,7 +978,12 @@ func (s *pgStore) SetUserModerator(userID string, isModerator bool) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
 		update users
 		set is_moderator = $2
 		where id = $1
@@ -845,7 +994,16 @@ func (s *pgStore) SetUserModerator(userID string, isModerator bool) error {
 	if tag.RowsAffected() == 0 {
 		return errors.New("user not found")
 	}
-	return nil
+	if isModerator {
+		if err := awardGeoDuelsTeamBadgeTx(ctx, tx, userID); err != nil {
+			return err
+		}
+	} else {
+		if err := removeGeoDuelsTeamBadgeTx(ctx, tx, userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, error) {
@@ -862,6 +1020,10 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `
 		select
 			u.id,
@@ -903,9 +1065,20 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 		   or lower(u.id) like $4
 		   or lower(coalesce(u.email, '')) like $4
 		   or lower(coalesce(u.display_name, ui.provider_name, '')) like $4
+		   or exists (
+			select 1
+			from user_identity_history ih
+			where ih.user_id = u.id
+			  and (
+				lower(ih.provider) like $4
+				or lower(ih.provider_user_id) like $4
+				or lower(coalesce(ih.email, '')) like $4
+				or lower(coalesce(ih.provider_name, '')) like $4
+			  )
+		   )
 		order by u.created_at desc, u.id desc
 		limit $5
-	`, modeDuel, defaultSeasonID, initialMMR, pattern, limit)
+	`, modeDuel, seasonID, initialMMR, pattern, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -943,14 +1116,24 @@ func (s *pgStore) SearchPlayers(query string, limit int) ([]AdminPlayerSummary, 
 		}
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.populateAdminPlayerIdentities(ctx, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (AdminPlayerSummary, error) {
 	var item AdminPlayerSummary
 	var bannedAt *time.Time
 	var reportMutedUntil *time.Time
-	err := s.pool.QueryRow(ctx, `
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return item, err
+	}
+	err = s.pool.QueryRow(ctx, `
 		select
 			u.id,
 			coalesce(u.email, ''),
@@ -988,7 +1171,7 @@ func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (Adm
 		left join ranked_stats rs on rs.user_id = u.id and rs.mode = $2 and rs.season_id = $3
 		left join moderation_reporter_reputation rep on rep.user_id = u.id
 		where u.id = $1
-	`, userID, modeDuel, defaultSeasonID, initialMMR).Scan(
+	`, userID, modeDuel, seasonID, initialMMR).Scan(
 		&item.UserID,
 		&item.Email,
 		&item.DisplayName,
@@ -1015,7 +1198,63 @@ func (s *pgStore) getAdminPlayerSummary(ctx context.Context, userID string) (Adm
 	if reportMutedUntil != nil {
 		item.ReportMutedUntil = *reportMutedUntil
 	}
-	return item, nil
+	items := []AdminPlayerSummary{item}
+	if err := s.populateAdminPlayerIdentities(ctx, items); err != nil {
+		return AdminPlayerSummary{}, err
+	}
+	return items[0], nil
+}
+
+func (s *pgStore) populateAdminPlayerIdentities(ctx context.Context, players []AdminPlayerSummary) error {
+	if len(players) == 0 {
+		return nil
+	}
+	userIDs := make([]string, 0, len(players))
+	byUserID := make(map[string]int, len(players))
+	for i := range players {
+		userIDs = append(userIDs, players[i].UserID)
+		byUserID[players[i].UserID] = i
+	}
+	rows, err := s.pool.Query(ctx, `
+		select
+			user_id,
+			provider,
+			provider_user_id,
+			coalesce(email, ''),
+			coalesce(provider_name, ''),
+			last_seen_at,
+			deleted_at
+		from user_identity_history
+		where user_id = any($1)
+		order by user_id, provider, deleted_at nulls first, last_seen_at desc
+	`, userIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID string
+		var identity contracts.AdminUserIdentity
+		var deletedAt *time.Time
+		if err := rows.Scan(
+			&userID,
+			&identity.Provider,
+			&identity.ProviderUserID,
+			&identity.Email,
+			&identity.ProviderName,
+			&identity.LastSeenAt,
+			&deletedAt,
+		); err != nil {
+			return err
+		}
+		if deletedAt != nil {
+			identity.DeletedAt = *deletedAt
+		}
+		if idx, ok := byUserID[userID]; ok {
+			players[idx].Identities = append(players[idx].Identities, identity)
+		}
+	}
+	return rows.Err()
 }
 
 func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
@@ -1024,6 +1263,11 @@ func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 	var bannedAt any
 	var banReason any
 	if banned {
@@ -1032,7 +1276,7 @@ func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
 			banReason = strings.TrimSpace(reason)
 		}
 	}
-	tag, err := s.pool.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		update users
 		set banned_at = $2,
 			ban_reason = $3
@@ -1044,7 +1288,46 @@ func (s *pgStore) SetPlayerBan(userID, reason string, banned bool) error {
 	if tag.RowsAffected() == 0 {
 		return errors.New("user not found")
 	}
-	return nil
+	if banned {
+		if err := banUserOAuthIdentities(ctx, tx, userID, strings.TrimSpace(reason), ""); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			update oauth_identity_bans
+			set revoked_at = coalesce(revoked_at, now())
+			where banned_user_id = $1
+			  and revoked_at is null
+		`, userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func banUserOAuthIdentities(ctx context.Context, tx pgx.Tx, userID, reason, actorUserID string) error {
+	reason = strings.TrimSpace(reason)
+	actorUserID = strings.TrimSpace(actorUserID)
+	_, err := tx.Exec(ctx, `
+		insert into oauth_identity_bans(provider, provider_user_id, banned_user_id, reason, created_by, created_at, revoked_at)
+		select provider, provider_user_id, $1, nullif($2, ''), nullif($3, ''), now(), null
+		from (
+			select provider, provider_user_id
+			from user_identity_history
+			where user_id = $1
+			union
+			select provider, provider_user_id
+			from user_identities
+			where user_id = $1
+		) identities
+		on conflict (provider, provider_user_id) do update set
+			banned_user_id = excluded.banned_user_id,
+			reason = excluded.reason,
+			created_by = excluded.created_by,
+			created_at = now(),
+			revoked_at = null
+	`, userID, reason, actorUserID)
+	return err
 }
 
 func (s *pgStore) ClearReporterMute(userID string) error {
@@ -1160,6 +1443,142 @@ func (s *pgStore) SetModerationSettings(settings ModerationSettings) error {
 			updated_at = now()
 	`, string(payload))
 	return err
+}
+
+func (s *pgStore) GetRankedSeasonSettings() (RankedSeasonSettings, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return RankedSeasonSettings{}, err
+	}
+	return RankedSeasonSettings{ActiveSeasonID: seasonID}, nil
+}
+
+func (s *pgStore) RolloverRankedSeason(nextSeasonID string) (RankedSeasonRolloverResult, error) {
+	nextSeasonID = strings.TrimSpace(nextSeasonID)
+	if nextSeasonID == "" {
+		return RankedSeasonRolloverResult{}, errors.New("season id required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	defer tx.Rollback(ctx)
+	previousSeasonID, err := activeSeasonIDTx(ctx, tx)
+	if err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	if previousSeasonID == nextSeasonID {
+		return RankedSeasonRolloverResult{}, errors.New("season is already active")
+	}
+	badgeID := seasonRankBadgeID(previousSeasonID)
+	displaySeason := seasonBadgeDisplayName(previousSeasonID)
+	badgeTag, err := tx.Exec(ctx, `
+		with ranked as (
+			select
+				r.user_id,
+				row_number() over (order by r.mmr desc, r.updated_at asc, r.user_id asc)::int as rank
+			from ranks r
+			join users u on u.id = r.user_id
+			where r.mode = $1
+				and r.season_id = $2
+				and coalesce(u.account_type, 'registered') <> 'guest'
+				and u.banned_at is null
+		)
+		insert into user_badges(user_id, badge_id, kind, label, description, image_url, season_id, rank)
+		select
+			user_id,
+			$3,
+			'season_rank',
+			$4 || ' #' || rank::text,
+			'Finished #' || rank::text || ' in ' || $4 || '.',
+			'/medals/platinum-medal.png',
+			$2,
+			rank
+		from ranked
+		where rank between 1 and 100
+		on conflict (user_id, badge_id) do nothing
+	`, modeDuel, previousSeasonID, badgeID, displaySeason)
+	if err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	seedTag, err := tx.Exec(ctx, `
+		insert into ranks(user_id, mode, season_id, mmr, rd)
+		select u.id, $1, $2, $3, $4
+		from users u
+		where coalesce(u.account_type, 'registered') <> 'guest'
+		on conflict (user_id, mode, season_id) do nothing
+	`, modeDuel, nextSeasonID, initialMMR, initialRatingRD)
+	if err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into ranked_stats(user_id, mode, season_id, games_played, wins)
+		select u.id, $1, $2, 0, 0
+		from users u
+		where coalesce(u.account_type, 'registered') <> 'guest'
+		on conflict (user_id, mode, season_id) do nothing
+	`, modeDuel, nextSeasonID); err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	settings := RankedSeasonSettings{ActiveSeasonID: nextSeasonID}
+	payload, err := json.Marshal(settings)
+	if err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into site_settings(key, value_json, updated_at)
+		values('ranked_season', $1::jsonb, now())
+		on conflict (key) do update set
+			value_json = excluded.value_json,
+			updated_at = now()
+	`, string(payload)); err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RankedSeasonRolloverResult{}, err
+	}
+	return RankedSeasonRolloverResult{
+		PreviousSeasonID: previousSeasonID,
+		ActiveSeasonID:   nextSeasonID,
+		BadgesAwarded:    int(badgeTag.RowsAffected()),
+		PlayersSeeded:    int(seedTag.RowsAffected()),
+	}, nil
+}
+
+func (s *pgStore) activeSeasonID(ctx context.Context) (string, error) {
+	return activeSeasonIDTx(ctx, s.pool)
+}
+
+type seasonQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func activeSeasonIDTx(ctx context.Context, q seasonQuerier) (string, error) {
+	var raw string
+	err := q.QueryRow(ctx, `
+		select value_json::text
+		from site_settings
+		where key = 'ranked_season'
+	`).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return defaultSeasonID, nil
+		}
+		return "", err
+	}
+	var settings RankedSeasonSettings
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		return defaultSeasonID, nil
+	}
+	seasonID := strings.TrimSpace(settings.ActiveSeasonID)
+	if seasonID == "" {
+		return defaultSeasonID, nil
+	}
+	return seasonID, nil
 }
 
 func (s *pgStore) ActivateMapRevision(mapKey, displayName string, dataset []byte) (MapRevisionSummary, error) {
@@ -1435,6 +1854,91 @@ func (s *pgStore) RevokeAuthSessionsForUser(userID string) error {
 	return err
 }
 
+func (s *pgStore) DeleteAccount(userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return errors.New("userID required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var isBanned bool
+	var banReason string
+	if err := tx.QueryRow(ctx, `
+		select banned_at is not null, coalesce(ban_reason, '')
+		from users
+		where id = $1
+	`, userID).Scan(&isBanned, &banReason); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("user not found")
+		}
+		return err
+	}
+	if isBanned {
+		if strings.TrimSpace(banReason) == "" {
+			banReason = "account deleted while banned"
+		}
+		if err := banUserOAuthIdentities(ctx, tx, userID, banReason, ""); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		update auth_sessions
+		set revoked_at = coalesce(revoked_at, now())
+		where user_id = $1 and revoked_at is null
+	`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into user_identity_history(user_id, provider, provider_user_id, email, provider_name, avatar_url, first_seen_at, last_seen_at, deleted_at)
+		select user_id, provider, provider_user_id, email, provider_name, avatar_url, created_at, last_seen_at, now()
+		from user_identities
+		where user_id = $1
+		on conflict (user_id, provider, provider_user_id) do update set
+			email = excluded.email,
+			provider_name = excluded.provider_name,
+			avatar_url = case
+				when excluded.avatar_url is null then user_identity_history.avatar_url
+				when excluded.avatar_url = '' then user_identity_history.avatar_url
+				else excluded.avatar_url
+			end,
+			last_seen_at = greatest(user_identity_history.last_seen_at, excluded.last_seen_at),
+			deleted_at = coalesce(user_identity_history.deleted_at, excluded.deleted_at)
+	`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		delete from user_identities
+		where user_id = $1
+	`, userID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		update users
+		set email = null,
+			display_name = 'Deleted player',
+			avatar_url = null,
+			onboarded_at = null,
+			account_type = 'guest',
+			is_admin = false,
+			is_moderator = false,
+			deleted_at = coalesce(deleted_at, now())
+		where id = $1
+	`, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("user not found")
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *pgStore) Close() {
 	if s.pool != nil {
 		s.pool.Close()
@@ -1459,6 +1963,10 @@ func (s *pgStore) UpsertUser(userID, email, displayName string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	seasonID, err := activeSeasonIDTx(ctx, tx)
+	if err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `
 		insert into users (id, email, display_name, avatar_url, onboarded_at, account_type)
@@ -1474,7 +1982,7 @@ func (s *pgStore) UpsertUser(userID, email, displayName string) error {
 		insert into ranks (user_id, mode, mmr, season_id)
 		values ($1, $2, $4, $3)
 		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, defaultSeasonID, initialMMR); err != nil {
+	`, userID, modeDuel, seasonID, initialMMR); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1488,7 +1996,7 @@ func (s *pgStore) UpsertUser(userID, email, displayName string) error {
 		insert into ranked_stats (user_id, mode, season_id, games_played, wins)
 		values ($1, $2, $3, 0, 0)
 		on conflict (user_id, mode, season_id) do nothing
-	`, userID, modeDuel, defaultSeasonID); err != nil {
+	`, userID, modeDuel, seasonID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1501,6 +2009,11 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	seasonID, err := s.activeSeasonID(ctx)
+	if err != nil {
+		return p, err
+	}
+	p.SeasonID = seasonID
 	row := s.pool.QueryRow(ctx, `
 		select
 			coalesce(nullif(u.display_name, seed.user_id), ui.provider_name, $1) as display_name,
@@ -1515,7 +2028,8 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 				coalesce(u.is_admin, false) as is_admin,
 				coalesce(u.is_moderator, false) as is_moderator,
 				coalesce(u.banned_at is not null, false) as is_banned,
-				coalesce(u.ban_reason, '') as ban_reason
+				coalesce(u.ban_reason, '') as ban_reason,
+				coalesce(u.selected_badge_id, '') as selected_badge_id
 		from (select $1 as user_id) seed
 		left join users u on u.id = seed.user_id
 		left join lateral (
@@ -1528,7 +2042,8 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		left join ranks r on r.user_id = seed.user_id and r.mode = $2 and r.season_id = $3
 		left join user_stats us on us.user_id = seed.user_id
 		left join ranked_stats rs on rs.user_id = seed.user_id and rs.mode = $2 and rs.season_id = $3
-	`, userID, modeDuel, defaultSeasonID, initialMMR, initialRatingRD)
+	`, userID, modeDuel, seasonID, initialMMR, initialRatingRD)
+	var selectedBadgeID string
 	if err := row.Scan(
 		&p.DisplayName,
 		&p.AvatarURL,
@@ -1543,21 +2058,210 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		&p.IsModerator,
 		&p.IsBanned,
 		&p.BanReason,
+		&selectedBadgeID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return p, nil
 		}
 		return p, err
 	}
+	badges, selected, err := s.profileBadges(ctx, userID, selectedBadgeID)
+	if err != nil {
+		return p, err
+	}
+	p.Badges = badges
+	p.SelectedBadge = selected
 	return p, nil
+}
+
+func (s *pgStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
+	userID = strings.TrimSpace(userID)
+	badgeID = strings.TrimSpace(badgeID)
+	if userID == "" {
+		return Profile{}, errors.New("user id required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	badges, _, err := s.profileBadges(ctx, userID, badgeID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if badgeID != "" {
+		owned := false
+		for _, badge := range badges {
+			if badge.ID == badgeID && badge.Owned {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			return Profile{}, errors.New("badge unavailable")
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `
+		update users set selected_badge_id = nullif($2, '')
+		where id = $1
+	`, userID, badgeID); err != nil {
+		return Profile{}, err
+	}
+	return s.GetProfile(userID)
+}
+
+func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID string) ([]contracts.PlayerBadge, *contracts.PlayerBadge, error) {
+	badges := []contracts.PlayerBadge{}
+	rows, err := s.pool.Query(ctx, `
+		select badge_id, kind, label, description, image_url, coalesce(season_id, ''), coalesce(rank, 0)
+		from user_badges
+		where user_id = $1
+		order by awarded_at desc, badge_id asc
+	`, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	hasDiscord := false
+	ownedSeasonBadges := map[string]bool{}
+	for rows.Next() {
+		var badge contracts.PlayerBadge
+		if err := rows.Scan(&badge.ID, &badge.Kind, &badge.Label, &badge.Description, &badge.ImageURL, &badge.SeasonID, &badge.Rank); err != nil {
+			return nil, nil, err
+		}
+		badge.Owned = true
+		if badge.ID == "discord-member" {
+			hasDiscord = true
+		}
+		if badge.Kind == "season_rank" {
+			ownedSeasonBadges[badge.ID] = true
+		}
+		badges = append(badges, badge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	for _, badge := range seasonRankBadgeTemplates() {
+		if !ownedSeasonBadges[badge.ID] {
+			badges = append(badges, badge)
+		}
+	}
+	if !hasDiscord {
+		badges = append(badges, contracts.PlayerBadge{
+			ID:          "discord-member",
+			Kind:        "community",
+			Label:       "Discord Member",
+			Description: "Awarded for linking Discord to your GeoDuels account.",
+			ImageURL:    "/medals/discord-medal.png",
+			Owned:       false,
+		})
+	}
+	var selected *contracts.PlayerBadge
+	for i := range badges {
+		if badges[i].ID == selectedBadgeID && badges[i].Owned {
+			selected = &badges[i]
+			break
+		}
+	}
+	if selected == nil {
+		for i := range badges {
+			if badges[i].Owned {
+				selected = &badges[i]
+				break
+			}
+		}
+	}
+	return badges, selected, nil
+}
+
+func seasonRankBadgeTemplates() []contracts.PlayerBadge {
+	return []contracts.PlayerBadge{
+		seasonRankBadgeTemplate("s2"),
+		seasonRankBadgeTemplate("s2.5"),
+	}
+}
+
+func seasonRankBadgeTemplate(seasonID string) contracts.PlayerBadge {
+	displaySeason := seasonBadgeDisplayName(seasonID)
+	return contracts.PlayerBadge{
+		ID:          seasonRankBadgeID(seasonID),
+		Kind:        "season_rank",
+		Label:       displaySeason + " Top 100",
+		Description: "Awarded to players who finish in the top 100 when " + displaySeason + " ends.",
+		ImageURL:    "/medals/platinum-medal.png",
+		SeasonID:    seasonID,
+		Owned:       false,
+	}
+}
+
+func seasonRankBadgeID(seasonID string) string {
+	return "season-" + strings.TrimSpace(seasonID) + "-top-100"
+}
+
+func seasonBadgeDisplayName(seasonID string) string {
+	switch strings.TrimSpace(seasonID) {
+	case "s2":
+		return "Season 1"
+	case "s2.5":
+		return "Season 2"
+	default:
+		value := strings.TrimPrefix(strings.TrimSpace(seasonID), "s")
+		if value == "" {
+			return "Season"
+		}
+		return "Season " + strings.ToUpper(value)
+	}
+}
+
+func awardDiscordMemberBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	_, err := tx.Exec(ctx, `
+		insert into user_badges(user_id, badge_id, kind, label, description, image_url)
+		values(
+			$1,
+			'discord-member',
+			'community',
+			'Discord Member',
+			'Awarded for linking Discord to your GeoDuels account.',
+			'/medals/discord-medal.png'
+		)
+		on conflict (user_id, badge_id) do nothing
+	`, userID)
+	return err
+}
+
+func awardGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	_, err := tx.Exec(ctx, `
+		insert into user_badges(user_id, badge_id, kind, label, description, image_url)
+		values(
+			$1,
+			'geoduels-team',
+			'special',
+			'GeoDuels Team',
+			'An exclusive medal for GeoDuels moderators and team members.',
+			'/medals/team-badge.png'
+		)
+		on conflict (user_id, badge_id) do nothing
+	`, userID)
+	return err
+}
+
+func removeGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	if _, err := tx.Exec(ctx, `
+		update users
+		set selected_badge_id = null
+		where id = $1
+			and selected_badge_id = 'geoduels-team'
+	`, userID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		delete from user_badges
+		where user_id = $1
+			and badge_id = 'geoduels-team'
+	`, userID)
+	return err
 }
 
 func (s *pgStore) ListLeaderboard(mode, seasonID string, limit, offset int) ([]LeaderboardEntry, error) {
 	if mode == "" {
 		mode = modeDuel
-	}
-	if seasonID == "" {
-		seasonID = defaultSeasonID
 	}
 	if limit <= 0 {
 		limit = 100
@@ -1571,6 +2275,13 @@ func (s *pgStore) ListLeaderboard(mode, seasonID string, limit, offset int) ([]L
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	if seasonID == "" {
+		var err error
+		seasonID, err = s.activeSeasonID(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	rows, err := s.pool.Query(ctx, `
 		select
@@ -1631,9 +2342,6 @@ func (s *pgStore) GetLeaderboardOverview(userID, mode, seasonID string, limit in
 	if mode == "" {
 		mode = modeDuel
 	}
-	if seasonID == "" {
-		seasonID = defaultSeasonID
-	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1648,6 +2356,12 @@ func (s *pgStore) GetLeaderboardOverview(userID, mode, seasonID string, limit in
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	if seasonID == "" {
+		seasonID, err = s.activeSeasonID(ctx)
+		if err != nil {
+			return LeaderboardOverview{}, err
+		}
+	}
 
 	var selfRank, totalPlayers int
 	if err := s.pool.QueryRow(ctx, `
@@ -1706,6 +2420,13 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	seasonID := strings.TrimSpace(snap.SeasonID)
+	if seasonID == "" {
+		seasonID, err = activeSeasonIDTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+	}
 
 	ensure := func(p contracts.PlayerState) error {
 		if p.UserID == "" {
@@ -1726,7 +2447,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 			insert into ranks (user_id, mode, mmr, season_id)
 			values ($1, $2, $4, $3)
 			on conflict (user_id, mode, season_id) do nothing
-			`, p.UserID, modeDuel, defaultSeasonID, initialMMR); err != nil {
+			`, p.UserID, modeDuel, seasonID, initialMMR); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -1740,7 +2461,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 			insert into ranked_stats (user_id, mode, season_id, games_played, wins)
 			values ($1, $2, $3, 0, 0)
 			on conflict (user_id, mode, season_id) do nothing
-		`, p.UserID, modeDuel, defaultSeasonID); err != nil {
+		`, p.UserID, modeDuel, seasonID); err != nil {
 			return err
 		}
 		return nil
@@ -1790,7 +2511,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 			from ranks
 			where user_id=$1 and mode=$2 and season_id=$3
 			for update
-		`, p1.UserID, modeDuel, defaultSeasonID).Scan(&p1Rating.MMR, &p1Rating.RD, &p1Rating.UpdatedAt); err != nil {
+		`, p1.UserID, modeDuel, seasonID).Scan(&p1Rating.MMR, &p1Rating.RD, &p1Rating.UpdatedAt); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `
@@ -1798,7 +2519,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 			from ranks
 			where user_id=$1 and mode=$2 and season_id=$3
 			for update
-		`, p2.UserID, modeDuel, defaultSeasonID).Scan(&p2Rating.MMR, &p2Rating.RD, &p2Rating.UpdatedAt); err != nil {
+		`, p2.UserID, modeDuel, seasonID).Scan(&p2Rating.MMR, &p2Rating.RD, &p2Rating.UpdatedAt); err != nil {
 			return err
 		}
 		p1Update, p2Update = CalculateDuelRatingUpdates(p1Rating, p2Rating, matchWinner, now)
@@ -1807,7 +2528,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 		if _, err := tx.Exec(ctx, `
 			update ranks set mmr=$2, rd=$5, updated_at=$6
 			where user_id=$1 and mode=$3 and season_id=$4
-		`, p1.UserID, p1Update.MMR, modeDuel, defaultSeasonID, p1Update.RD, now); err != nil {
+		`, p1.UserID, p1Update.MMR, modeDuel, seasonID, p1Update.RD, now); err != nil {
 			return err
 		}
 	}
@@ -1815,7 +2536,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 		if _, err := tx.Exec(ctx, `
 			update ranks set mmr=$2, rd=$5, updated_at=$6
 			where user_id=$1 and mode=$3 and season_id=$4
-		`, p2.UserID, p2Update.MMR, modeDuel, defaultSeasonID, p2Update.RD, now); err != nil {
+		`, p2.UserID, p2Update.MMR, modeDuel, seasonID, p2Update.RD, now); err != nil {
 			return err
 		}
 	}
@@ -1844,7 +2565,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 				wins = wins + case when user_id = $2 then 1 else 0 end,
 				updated_at = now()
 			where user_id = $1 and mode = $3 and season_id = $4
-		`, p1.UserID, winner, modeDuel, defaultSeasonID); err != nil {
+		`, p1.UserID, winner, modeDuel, seasonID); err != nil {
 			return err
 		}
 	}
@@ -1855,7 +2576,7 @@ func (s *pgStore) RecordMatchResult(snap contracts.MatchSnapshot) error {
 				wins = wins + case when user_id = $2 then 1 else 0 end,
 				updated_at = now()
 			where user_id = $1 and mode = $3 and season_id = $4
-		`, p2.UserID, winner, modeDuel, defaultSeasonID); err != nil {
+		`, p2.UserID, winner, modeDuel, seasonID); err != nil {
 			return err
 		}
 	}
@@ -3354,6 +4075,9 @@ func (s *pgStore) BanPlayerForCheating(userID, reason, actorUserID string) (Chea
 	if tag.RowsAffected() == 0 {
 		return CheatingBanSummary{}, errors.New("user not found")
 	}
+	if err := banUserOAuthIdentities(ctx, tx, userID, reason, actorUserID); err != nil {
+		return CheatingBanSummary{}, err
+	}
 	if err := tx.QueryRow(ctx, `
 		select coalesce(registration_ip_address, '')
 		from users
@@ -3459,6 +4183,10 @@ func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUse
 	if !since.IsZero() {
 		sinceArg = since
 	}
+	seasonID, err := activeSeasonIDTx(ctx, tx)
+	if err != nil {
+		return EloRefundSummary{}, err
+	}
 	rows, err := tx.Query(ctx, `
 		with candidate_matches as (
 			select
@@ -3528,7 +4256,7 @@ func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUse
 			from ranks
 			where user_id = $1 and mode = $2 and season_id = $3
 			for update
-		`, item.opponentID, modeDuel, defaultSeasonID).Scan(&current.MMR, &current.RD, &current.UpdatedAt); err != nil {
+			`, item.opponentID, modeDuel, seasonID).Scan(&current.MMR, &current.RD, &current.UpdatedAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
@@ -3590,7 +4318,7 @@ func issueCurrentMMRRefundsForCheater(ctx context.Context, tx pgx.Tx, cheaterUse
 			where user_id = $1
 				and mode = $2
 				and season_id = $3
-		`, item.opponentID, modeDuel, defaultSeasonID, after); err != nil {
+			`, item.opponentID, modeDuel, seasonID, after); err != nil {
 			return EloRefundSummary{}, err
 		}
 		summary.RefundsIssued++

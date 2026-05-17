@@ -33,8 +33,6 @@ describe('runtime-config', () => {
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: 'google-client',
       NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: 'https://one.test, https://two.test',
       NEXT_PUBLIC_GOOGLE_EMBED_KEY: 'embed-key',
-      NEXT_PUBLIC_ADSENSE_CLIENT_ID: 'ca-pub-1234567890',
-      NEXT_PUBLIC_ADSENSE_PLAY_SLOT: '1234567890',
       NEXT_PUBLIC_APP_VERSION: 'sha-123'
     });
 
@@ -44,8 +42,6 @@ describe('runtime-config', () => {
     expect(config.googleClientId).toBe('google-client');
     expect(config.googleAllowedOrigins).toEqual(['https://one.test', 'https://two.test']);
     expect(config.googleEmbedKey).toBe('embed-key');
-    expect(config.adsenseClientId).toBe('ca-pub-1234567890');
-    expect(config.adsensePlaySlot).toBe('1234567890');
     expect(config.appVersion).toBe('sha-123');
   });
 

@@ -74,6 +74,29 @@ func TestMemoryStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) 
 	}
 }
 
+func TestMemoryStoreCarriesSeasonIDIntoMatch(t *testing.T) {
+	store := newMemory()
+
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600, SeasonID: "s-test"}); err != nil {
+		t.Fatalf("first join failed: %v", err)
+	}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600, SeasonID: "s-test"}); err != nil {
+		t.Fatalf("second join failed: %v", err)
+	}
+	ageMemoryQueue(store, QueuePoolRegistered, mutualMatchWaitMS+int64(10*time.Millisecond))
+
+	if _, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
+		t.Fatalf("matchmaking failed: %v", err)
+	}
+	match, err := store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "p1")
+	if err != nil {
+		t.Fatalf("poll failed: %v", err)
+	}
+	if match == nil || match.SeasonID != "s-test" {
+		t.Fatalf("match season = %#v, want s-test", match)
+	}
+}
+
 func TestMemoryStoreExpandsWindowOverTime(t *testing.T) {
 	store := newMemory()
 	highMMR := 1000 + baseMatchWindowMMR + 1
@@ -218,6 +241,32 @@ func TestRedisStoreMatchesPlayersInsideBaseWindowAfterMutualWait(t *testing.T) {
 	}
 	if match == nil {
 		t.Fatalf("expected redis store to match after mutual wait")
+	}
+}
+
+func TestRedisStoreCarriesSeasonIDIntoMatch(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	store := &redisStore{rdb: rdb}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p1", DisplayName: "p1", MMR: 1600, SeasonID: "s-test"}); err != nil {
+		t.Fatalf("first join failed: %v", err)
+	}
+	if _, _, err := store.Join(QueuePoolRegistered, contracts.RulesetMoving, contracts.QueueJoinRequest{UserID: "p2", DisplayName: "p2", MMR: 1600, SeasonID: "s-test"}); err != nil {
+		t.Fatalf("second join failed: %v", err)
+	}
+	ageRedisQueue(t, rdb, QueuePoolRegistered, []string{"p1", "p2"}, mutualMatchWaitMS+int64(10*time.Millisecond))
+
+	if _, err := store.RunMatchmaking(QueuePoolRegistered, contracts.RulesetMoving, 50); err != nil {
+		t.Fatalf("matchmaking failed: %v", err)
+	}
+	match, err := store.Poll(QueuePoolRegistered, []contracts.GameRuleset{contracts.RulesetMoving}, "p1")
+	if err != nil {
+		t.Fatalf("poll failed: %v", err)
+	}
+	if match == nil || match.SeasonID != "s-test" {
+		t.Fatalf("match season = %#v, want s-test", match)
 	}
 }
 

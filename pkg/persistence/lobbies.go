@@ -21,7 +21,7 @@ func (s *pgStore) CreateLobby(ownerUserID string, mode contracts.MatchMode, mapS
 	if mode == "" {
 		mode = contracts.ModeDuel
 	}
-	if mode != contracts.ModeDuel {
+	if !contracts.IsPrivatePartyMode(mode) {
 		return contracts.LobbySnapshot{}, errors.New("unsupported lobby mode")
 	}
 	if strings.TrimSpace(mapScope) == "" {
@@ -53,8 +53,8 @@ func (s *pgStore) CreateLobby(ownerUserID string, mode contracts.MatchMode, mapS
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
-			insert into lobby_members(lobby_id, user_id, role, ready)
-			values($1, $2, 'owner', false)
+		insert into lobby_members(lobby_id, user_id, role, ready, team_id)
+		values($1, $2, 'owner', false, 'a')
 		`, lobbyID, ownerUserID); err != nil {
 			_ = tx.Rollback(ctx)
 			cancel()
@@ -75,6 +75,27 @@ func (s *pgStore) GetLobbyByID(lobbyID string) (contracts.LobbySnapshot, bool, e
 	return s.getLobby("l.id = $1", strings.TrimSpace(lobbyID))
 }
 
+func (s *pgStore) SetLobbyMode(lobbyID string, mode contracts.MatchMode) error {
+	lobbyID = strings.TrimSpace(lobbyID)
+	if lobbyID == "" || !contracts.IsPrivatePartyMode(mode) {
+		return errors.New("invalid lobby mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		update lobbies
+		set mode = $2, updated_at = now()
+		where id = $1 and state = 'open'
+	`, lobbyID, string(mode))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("lobby is not open")
+	}
+	return nil
+}
+
 func (s *pgStore) GetLobbyByInviteCode(inviteCode string) (contracts.LobbySnapshot, bool, error) {
 	return s.getLobby("l.invite_code = $1", strings.ToUpper(strings.TrimSpace(inviteCode)))
 }
@@ -93,6 +114,16 @@ func (s *pgStore) JoinLobby(lobbyID, userID string) (contracts.LobbySnapshot, er
 	if err := s.ensureLobbyOpen(ctx, lobbyID); err != nil {
 		return contracts.LobbySnapshot{}, err
 	}
+	var activeMembers int
+	if err := s.pool.QueryRow(ctx, `
+		select count(*) from lobby_members
+		where lobby_id = $1 and left_at is null and user_id <> $2
+	`, lobbyID, userID).Scan(&activeMembers); err != nil {
+		return contracts.LobbySnapshot{}, err
+	}
+	if activeMembers >= 8 {
+		return contracts.LobbySnapshot{}, errors.New("lobby is full")
+	}
 	role := "member"
 	if snap, ok, err := s.GetLobbyByID(lobbyID); err != nil {
 		return contracts.LobbySnapshot{}, err
@@ -102,10 +133,18 @@ func (s *pgStore) JoinLobby(lobbyID, userID string) (contracts.LobbySnapshot, er
 		role = "owner"
 	}
 	_, err := s.pool.Exec(ctx, `
-		insert into lobby_members(lobby_id, user_id, role, ready, left_at)
-		values($1, $2, $3, false, null)
+		insert into lobby_members(lobby_id, user_id, role, ready, team_id, left_at)
+		values($1, $2, $3, false, (
+			select case
+				when count(*) filter (where team_id = 'a') <= count(*) filter (where team_id = 'b') then 'a'
+				else 'b'
+			end
+			from lobby_members
+			where lobby_id = $1 and left_at is null
+		), null)
 		on conflict (lobby_id, user_id) do update set
 			role = case when lobby_members.role = 'owner' then 'owner' else excluded.role end,
+			team_id = coalesce(lobby_members.team_id, excluded.team_id),
 			left_at = null,
 			joined_at = case when lobby_members.left_at is null then lobby_members.joined_at else now() end
 	`, lobbyID, userID, role)
@@ -186,6 +225,39 @@ func (s *pgStore) LeaveLobby(lobbyID, userID string) (contracts.LobbySnapshot, e
 	}
 	next, _, err := s.GetLobbyByID(lobbyID)
 	return next, err
+}
+
+func (s *pgStore) SetLobbyMemberTeam(lobbyID, userID, teamID string) (contracts.LobbySnapshot, error) {
+	lobbyID = strings.TrimSpace(lobbyID)
+	userID = strings.TrimSpace(userID)
+	teamID = strings.ToLower(strings.TrimSpace(teamID))
+	if lobbyID == "" || userID == "" || (teamID != "a" && teamID != "b") {
+		return contracts.LobbySnapshot{}, errors.New("invalid lobby team")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if err := s.ensureLobbyOpen(ctx, lobbyID); err != nil {
+		return contracts.LobbySnapshot{}, err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		update lobby_members
+		set team_id = $3
+		where lobby_id = $1 and user_id = $2 and left_at is null
+	`, lobbyID, userID, teamID)
+	if err != nil {
+		return contracts.LobbySnapshot{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return contracts.LobbySnapshot{}, pgx.ErrNoRows
+	}
+	if _, err := s.pool.Exec(ctx, `
+		update lobbies set updated_at = now()
+		where id = $1 and state = 'open'
+	`, lobbyID); err != nil {
+		return contracts.LobbySnapshot{}, err
+	}
+	snap, _, err := s.GetLobbyByID(lobbyID)
+	return snap, err
 }
 
 func (s *pgStore) ExpireOpenLobbies() error {
@@ -462,9 +534,11 @@ func (s *pgStore) getLobby(whereClause, value string) (contracts.LobbySnapshot, 
 func (s *pgStore) listLobbyMembers(ctx context.Context, lobbyID string) ([]contracts.LobbyMember, error) {
 	rows, err := s.pool.Query(ctx, `
 		select m.user_id, u.display_name, coalesce(u.avatar_url, ''),
-		       u.account_type = 'guest',
-		       coalesce(u.is_admin, false),
-		       m.role, m.ready, m.joined_at
+	       u.account_type = 'guest',
+	       coalesce(u.is_admin, false),
+	       coalesce(u.selected_badge_id, ''),
+	       coalesce(m.team_id, ''),
+	       m.role, m.ready, m.joined_at
 		from lobby_members m
 		join users u on u.id = m.user_id
 		where m.lobby_id = $1 and m.left_at is null
@@ -477,9 +551,15 @@ func (s *pgStore) listLobbyMembers(ctx context.Context, lobbyID string) ([]contr
 	out := []contracts.LobbyMember{}
 	for rows.Next() {
 		var member contracts.LobbyMember
-		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
+		var selectedBadgeID string
+		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeID, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
 			return nil, err
 		}
+		_, selectedBadge, err := s.profileBadges(ctx, member.UserID, selectedBadgeID)
+		if err != nil {
+			return nil, err
+		}
+		member.SelectedBadge = selectedBadge
 		out = append(out, member)
 	}
 	return out, rows.Err()

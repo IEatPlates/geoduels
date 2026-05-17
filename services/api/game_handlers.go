@@ -54,6 +54,37 @@ func (a *api) me(w http.ResponseWriter, r *http.Request) {
 		"isModerator":       profile.IsModerator,
 		"isBanned":          profile.IsBanned,
 		"banReason":         profile.BanReason,
+		"linkedProviders":   identity.LinkedProviders,
+		"badges":            profile.Badges,
+		"selectedBadge":     profile.SelectedBadge,
+	})
+}
+
+func (a *api) updateSelectedBadge(w http.ResponseWriter, r *http.Request) {
+	claims, err := a.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		BadgeID string `json:"badgeId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	profile, err := a.store.UpdateSelectedBadge(claims.Sub, req.BadgeID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unavailable") {
+			http.Error(w, "badge unavailable", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "profile unavailable", http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"badges":        profile.Badges,
+		"selectedBadge": profile.SelectedBadge,
 	})
 }
 
@@ -99,7 +130,12 @@ func (a *api) leaderboard(w http.ResponseWriter, r *http.Request) {
 		mode = "duel"
 	}
 	if season == "" {
-		season = "s2"
+		settings, err := a.store.GetRankedSeasonSettings()
+		if err != nil {
+			http.Error(w, "leaderboard unavailable", http.StatusInternalServerError)
+			return
+		}
+		season = settings.ActiveSeasonID
 	}
 
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -506,6 +542,7 @@ func (a *api) startSingleplayerSession(w http.ResponseWriter, r *http.Request) {
 				AvatarURL:         profile.AvatarURL,
 				IsGuest:           profile.IsGuest,
 				IsAdmin:           profile.IsAdmin,
+				SelectedBadge:     profile.SelectedBadge,
 			},
 		},
 		MapScope: "world",

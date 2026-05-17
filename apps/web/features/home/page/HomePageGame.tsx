@@ -50,6 +50,8 @@ export default function HomePageGame({
       streetViewInteractive={game.streetViewInteractive}
       showResultStage={game.showResultStage}
       isSingleplayer={game.isSingleplayer}
+      isPointsMode={game.isPointsMode}
+      partyMode={game.mode === "singleplayer" ? undefined : game.mode}
       resultOverlay={
         game.roundResult && game.resultOverlay
           ? {
@@ -58,15 +60,24 @@ export default function HomePageGame({
             }
           : undefined
       }
+      roundResults={game.roundResults}
+      resultPlayerNames={game.resultPlayerNames}
+      resultPlayerAvatars={game.resultPlayerAvatars}
+      resultPlayerFallbacks={game.resultPlayerFallbacks}
+      participantsById={game.participantsById}
       selfName={game.selfName}
       selfAvatarUrl={game.selfAvatarUrl}
       selfFallback={game.selfFallback}
+      selfAvatarColor={game.selfAvatarColor}
       selfIsAdmin={game.selfIsAdmin}
+      selfSelectedBadge={game.selfSelectedBadge}
       opponentName={game.opponentName}
       opponentIsAdmin={game.opponentIsAdmin}
+      opponentSelectedBadge={game.opponentSelectedBadge}
       opponentDisconnected={game.opponentDisconnected}
       oppAvatarUrl={game.oppAvatarUrl}
       oppFallback={game.oppFallback}
+      oppAvatarColor={game.oppAvatarColor}
       hpPct={(hp) => formatHpPct(maxHP, hp)}
       mm={game.mm}
       ss={game.ss}
@@ -74,8 +85,6 @@ export default function HomePageGame({
       timerProgressPct={game.timerProgressPct}
       isTimerCritical={game.isTimerCritical}
       isTimerPulseActive={game.isTimerPulseActive}
-      showHudStatus={game.showHudStatus}
-      hudStatusLabel={game.hudStatusLabel}
       resultMode={game.resultMode}
       selfHP={game.selfHP}
       oppHP={game.oppHP}

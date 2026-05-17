@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { PlayerBadgeInfo } from "./PlayerBadge";
 
 export type RoundPlayerResult = {
   userId: string;
@@ -11,6 +12,18 @@ export type RoundPlayerResult = {
   hpAfterRound?: number;
   guessUnixMs?: number;
   guessMs?: number;
+};
+
+export type RoundTeamResult = {
+  teamId: string;
+  representativeUserId?: string;
+  lat: number;
+  lng: number;
+  distanceKm: number;
+  score: number;
+  damageDealt?: number;
+  damageTaken?: number;
+  hpAfterRound?: number;
 };
 
 export type ResultPhase =
@@ -110,6 +123,7 @@ export type RoundResult = {
   roundNumber: number;
   actualLocation: { lat: number; lng: number };
   players: Record<string, RoundPlayerResult>;
+  teams?: Record<string, RoundTeamResult>;
 };
 
 export type SnapshotPlayer = {
@@ -121,6 +135,8 @@ export type SnapshotPlayer = {
   avatarUrl?: string;
   isGuest?: boolean;
   isAdmin?: boolean;
+  selectedBadge?: PlayerBadgeInfo | null;
+  teamId?: string;
   hp: number;
   totalScore?: number;
   finalized: boolean;
@@ -135,12 +151,13 @@ export type RatingDeltaPreview = {
 
 export type Snapshot = {
   matchId: string;
-  mode?: "duel" | "singleplayer";
+  mode?: "duel" | "singleplayer" | "team_duel" | "free_for_all";
   config?: {
     ruleset?: "moving" | "nmpz";
     mapKey?: string;
-    roundTimerMode?: "pressure" | "fixed";
+    roundTimerMode?: "none" | "pressure" | "fixed";
     roundTimeLimitMs?: number;
+    pressureTimeLimitMs?: number;
   };
   unranked?: boolean;
   state: string;
@@ -167,6 +184,7 @@ export type Snapshot = {
   lastRoundResult?: RoundResult;
   roundResults?: RoundResult[];
   players: Record<string, SnapshotPlayer>;
+  teams?: Record<string, { teamId: string; name?: string; hp?: number; players: string[] }>;
   self?: {
     userId: string;
     currentGuess?: { lat: number; lng: number };

@@ -2,6 +2,7 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { ObservableStore } from "../../../lib/observable-store";
 import { INITIAL_MMR, INITIAL_RATING_RD } from "../../../lib/elo";
 import { decodeAccessTokenExpiry } from "../lib/token-expiry";
+import type { PlayerBadgeInfo } from "../../../components/ui/PlayerBadge";
 import {
   emptyAuthSession,
   hasPlayableSession,
@@ -60,6 +61,8 @@ type SessionPatch = Partial<
     | "authMigrationRequired"
     | "recoveryAvailable"
     | "linkedProviders"
+    | "badges"
+    | "selectedBadge"
     | "canPlay"
   >
 >;
@@ -79,6 +82,9 @@ type ProfileSnapshot = {
   wins?: unknown;
   rankedGamesPlayed?: unknown;
   rankedWins?: unknown;
+  badges?: unknown;
+  selectedBadge?: unknown;
+  linkedProviders?: unknown;
 };
 
 export type SessionState = {
@@ -101,13 +107,15 @@ export type SessionState = {
   authMigrationRequired?: boolean;
   recoveryAvailable?: boolean;
   linkedProviders?: string[];
+  badges?: PlayerBadgeInfo[];
+  selectedBadge?: PlayerBadgeInfo | null;
   canPlay?: boolean;
   nicknameInput: string;
   nicknameError: string;
   nicknameSaving: boolean;
   authLoading: boolean;
   authError: string;
-  googleRecoveryEnabled: boolean;
+  googleSignInEnabled: boolean;
   googleClientId: string;
   discordSignInEnabled?: boolean;
   discordClientId?: string;
@@ -151,13 +159,15 @@ const initialState: SessionState = {
   authMigrationRequired: false,
   recoveryAvailable: false,
   linkedProviders: [],
+  badges: [],
+  selectedBadge: null,
   canPlay: false,
   nicknameInput: "",
   nicknameError: "",
   nicknameSaving: false,
   authLoading: false,
   authError: "",
-  googleRecoveryEnabled: false,
+  googleSignInEnabled: false,
   googleClientId: "",
   discordSignInEnabled: false,
   discordClientId: "",
@@ -184,7 +194,7 @@ export class SessionController extends ObservableStore<SessionState> {
     this.config = params.config;
     this.state = {
       ...initialState,
-      googleRecoveryEnabled: !!params.config.googleClientId,
+      googleSignInEnabled: !!params.config.googleClientId,
       googleClientId: params.config.googleClientId,
       discordSignInEnabled: !!params.config.discordClientId,
       discordClientId: params.config.discordClientId,
@@ -221,7 +231,7 @@ export class SessionController extends ObservableStore<SessionState> {
     if (this.started || typeof window === "undefined") return;
     this.mounted = true;
     this.started = true;
-    this.syncGoogleRecoveryState();
+    this.syncGoogleSignInState();
     window.addEventListener("message", this.messageHandler);
     this.emit();
   }
@@ -279,10 +289,10 @@ export class SessionController extends ObservableStore<SessionState> {
     };
   }
 
-  private syncGoogleRecoveryState() {
+  private syncGoogleSignInState() {
     if (typeof window === "undefined") return;
     if (!this.config.googleClientId) {
-      this.patchState({ googleRecoveryEnabled: false });
+      this.patchState({ googleSignInEnabled: false });
       return;
     }
     const currentOrigin = window.location.origin;
@@ -292,20 +302,20 @@ export class SessionController extends ObservableStore<SessionState> {
         window.location.hostname === "127.0.0.1";
       if (isLocalHost) {
         this.patchState({
-          googleRecoveryEnabled: false,
-          authError: `Google account recovery is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
+          googleSignInEnabled: false,
+          authError: `Google sign-in is disabled on ${currentOrigin} until NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS is set.`,
         });
         return;
       }
-      this.patchState({ googleRecoveryEnabled: true });
+      this.patchState({ googleSignInEnabled: true });
       return;
     }
     const allowed = this.config.googleAllowedOrigins.includes(currentOrigin);
     this.patchState({
-      googleRecoveryEnabled: allowed,
+      googleSignInEnabled: allowed,
       authError: allowed
         ? this.state.authError
-        : `Google account recovery is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
+        : `Google sign-in is disabled for ${currentOrigin}. Add this origin to Google OAuth and NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS.`,
     });
   }
 
@@ -314,7 +324,7 @@ export class SessionController extends ObservableStore<SessionState> {
     this.session = emptyAuthSession();
     this.patchState({
       ...initialState,
-      googleRecoveryEnabled: this.state.googleRecoveryEnabled,
+      googleSignInEnabled: this.state.googleSignInEnabled,
       googleClientId: this.config.googleClientId,
       discordSignInEnabled: this.state.discordSignInEnabled,
       discordClientId: this.config.discordClientId,
@@ -563,7 +573,21 @@ export class SessionController extends ObservableStore<SessionState> {
         typeof profile.rankedWins === "number"
           ? profile.rankedWins
           : this.state.rankedWins,
+      badges: normalizeBadges(profile.badges),
+      selectedBadge: normalizeBadge(profile.selectedBadge),
+      linkedProviders: Array.isArray(profile.linkedProviders)
+        ? profile.linkedProviders.filter((provider): provider is string => typeof provider === "string")
+        : this.state.linkedProviders,
       nicknameInput: this.state.nicknameInput || nextDisplayName,
+    });
+  }
+
+  applyBadgeSelection(payload: unknown) {
+    if (!payload || typeof payload !== "object") return;
+    const raw = payload as Record<string, unknown>;
+    this.patchState({
+      badges: normalizeBadges(raw.badges),
+      selectedBadge: normalizeBadge(raw.selectedBadge),
     });
   }
 
@@ -572,6 +596,29 @@ export class SessionController extends ObservableStore<SessionState> {
       leaderboard: normalizeLeaderboardSummary(summary),
     });
   }
+}
+
+function normalizeBadge(value: unknown): PlayerBadgeInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    id: typeof raw.id === "string" ? raw.id : "",
+    kind: typeof raw.kind === "string" ? raw.kind : "",
+    label: typeof raw.label === "string" ? raw.label : "",
+    description: typeof raw.description === "string" ? raw.description : "",
+    imageUrl: typeof raw.imageUrl === "string" ? raw.imageUrl : "",
+    seasonId: typeof raw.seasonId === "string" ? raw.seasonId : undefined,
+    rank: typeof raw.rank === "number" ? raw.rank : undefined,
+    owned: typeof raw.owned === "boolean" ? raw.owned : false,
+  };
+}
+
+function normalizeBadges(value: unknown): PlayerBadgeInfo[] {
+  return Array.isArray(value)
+    ? value
+        .map((badge) => normalizeBadge(badge))
+        .filter((badge): badge is PlayerBadgeInfo => !!badge?.id)
+    : [];
 }
 
 function normalizeLeaderboardSummary(

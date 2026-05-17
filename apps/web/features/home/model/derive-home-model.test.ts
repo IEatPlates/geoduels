@@ -28,7 +28,7 @@ function createAuthState(overrides: Partial<SessionState> = {}): SessionState {
     nicknameSaving: false,
     authLoading: false,
     authError: '',
-    googleRecoveryEnabled: true,
+    googleSignInEnabled: true,
     googleClientId: 'google-client',
     ...overrides
   };
@@ -314,6 +314,89 @@ describe('deriveHomeModel', () => {
     expect(model.game.resultOverlay?.damage).toBe(3000);
   });
 
+  it('derives team duel round result overlay from team representatives', () => {
+    const base = createSnapshot();
+    const snapshot = createSnapshot({
+      mode: 'team_duel',
+      phase: 'round_result',
+      roundPhase: 'round_result',
+      players: {
+        self: { ...base.players.self, teamId: 'a', hp: 6000 },
+        mate: { ...base.players.self, userId: 'mate', displayName: 'Mate', teamId: 'a', hp: 6000 },
+        opp: { ...base.players.opp, teamId: 'b', hp: 3600 },
+        opp2: { ...base.players.opp, userId: 'opp2', displayName: 'Opp Two', teamId: 'b', hp: 3600 }
+      },
+      teams: {
+        a: { teamId: 'a', name: 'Team Red', hp: 6000, players: ['self', 'mate'] },
+        b: { teamId: 'b', name: 'Team Blue', hp: 3600, players: ['opp', 'opp2'] }
+      },
+      lastRoundResult: {
+        roundId: 'round-1',
+        roundNumber: 3,
+        actualLocation: { lat: 0, lng: 0 },
+        players: {
+          self: { userId: 'self', lat: 0, lng: 0, score: 4100, distanceKm: 15, hpAfterRound: 6000 },
+          mate: { userId: 'mate', lat: 1, lng: 1, score: 4500, distanceKm: 9, hpAfterRound: 6000 },
+          opp: { userId: 'opp', lat: 2, lng: 2, score: 2100, distanceKm: 900, hpAfterRound: 3600 },
+          opp2: { userId: 'opp2', lat: 3, lng: 3, score: 1200, distanceKm: 1500, hpAfterRound: 3600 }
+        },
+        teams: {
+          a: { teamId: 'a', representativeUserId: 'mate', lat: 1, lng: 1, score: 4500, distanceKm: 9, hpAfterRound: 6000 },
+          b: { teamId: 'b', representativeUserId: 'opp', lat: 2, lng: 2, score: 2100, distanceKm: 900, hpAfterRound: 3600 }
+        }
+      }
+    });
+
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(snapshot),
+      game: createGameState({ resultPhase: 'scores', resultShownHP: { self: 6000, opp: 3600 } }),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.selfName).toBe('Team Red');
+    expect(model.game.opponentName).toBe('Team Blue');
+    expect(model.game.resultOverlay?.winner).toBe('self');
+    expect(model.game.resultOverlay?.damage).toBe(2400);
+    expect(model.game.resultOverlay?.players.self.fallback).toBe('R');
+    expect(model.game.resultOverlay?.players.opp.fallback).toBe('B');
+  });
+
+  it('uses points result UI for free for all instead of the duel overlay', () => {
+    const snapshot = createSnapshot({
+      mode: 'free_for_all',
+      phase: 'round_result',
+      roundPhase: 'round_result',
+      players: {
+        ...createSnapshot().players,
+        self: { ...createSnapshot().players.self, totalScore: 4200 }
+      },
+      lastRoundResult: {
+        roundId: 'round-1',
+        roundNumber: 1,
+        actualLocation: { lat: 0, lng: 0 },
+        players: {
+          self: { userId: 'self', lat: 0, lng: 0, score: 4200, distanceKm: 10, hpAfterRound: 0 },
+          opp: { userId: 'opp', lat: 1, lng: 1, score: 1200, distanceKm: 500, hpAfterRound: 0 }
+        }
+      }
+    });
+
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(snapshot),
+      game: createGameState({ resultPhase: 'hp_apply', resultShownHP: { self: 4200, opp: 0 } }),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.showResultStage).toBe(true);
+    expect(model.game.isPointsMode).toBe(true);
+    expect(model.game.resultOverlay).toBeUndefined();
+    expect(model.game.currentRoundScore).toBe(4200);
+  });
+
   it('falls back safely when an opponent is missing', () => {
     const snapshot = createSnapshot({ players: { self: createSnapshot().players.self } });
     const model = deriveHomeModel({
@@ -491,5 +574,32 @@ describe('deriveHomeModel', () => {
 
     expect(model.lobby.inGame).toBe(false);
     expect(model.meta.activeMatchId).toBe('match-1');
+  });
+
+  it('uses the same moving timer border for free-for-all rounds', () => {
+    const model = deriveHomeModel({
+      auth: createAuthState(),
+      match: createMatchState(createSnapshot({
+        mode: 'free_for_all',
+        config: {
+          roundTimerMode: 'fixed',
+          roundTimeLimitMs: 20_000,
+        },
+        currentRound: {
+          roundId: 'round-1',
+          roundNumber: 3,
+          timerStarted: true,
+          location: { panoId: 'pano-123' },
+        },
+      })),
+      game: createGameState({ roundMSLeft: 10_000, displayRoundSeconds: 10 }),
+      config,
+      routeMatchId: 'match-1'
+    });
+
+    expect(model.game.mode).toBe('free_for_all');
+    expect(model.game.isRoundTimerRunning).toBe(true);
+    expect(model.game.timerProgressPct).toBe(50);
+    expect(model.game.isTimerCritical).toBe(true);
   });
 });

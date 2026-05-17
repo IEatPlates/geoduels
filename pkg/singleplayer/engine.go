@@ -75,7 +75,7 @@ func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[st
 	}
 	session := &Session{
 		ID:              matchID,
-		Player:          &contracts.PlayerState{UserID: playerID, DisplayName: name, MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed, AvatarURL: profile.AvatarURL, IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin},
+		Player:          &contracts.PlayerState{UserID: playerID, DisplayName: name, MMR: profile.MMR, RatingRD: profile.RatingRD, RankedGamesPlayed: profile.RankedGamesPlayed, AvatarURL: profile.AvatarURL, IsGuest: profile.IsGuest, IsAdmin: profile.IsAdmin, SelectedBadge: profile.SelectedBadge},
 		CurrentLocation: firstRound,
 		CurrentIndex:    0,
 		RoundID:         roundID(matchID, 1),

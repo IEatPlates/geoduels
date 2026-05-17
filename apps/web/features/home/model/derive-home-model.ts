@@ -2,6 +2,10 @@ import type {
   RoundResultOverlayProps,
   Snapshot,
 } from "../../../components/ui/types";
+import type {
+  ParticipantIdentityView,
+  PlayerIdentityView,
+} from "../../../components/ui/PlayerIdentity";
 import { INITIAL_MMR } from "../../../lib/elo";
 import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { deriveUIPhase } from "../../../lib/uiPhase";
@@ -26,6 +30,19 @@ type Params = {
 };
 
 const SINGLEPLAYER_TOTAL_ROUNDS = 5;
+const DEFAULT_PRESSURE_TIME_MS = 15_000;
+
+function teamName(teamId: string) {
+  return teamId === "b" ? "Team Blue" : "Team Red";
+}
+
+function teamFallback(teamId: string) {
+  return teamId === "b" ? "B" : "R";
+}
+
+function teamColor(teamId: string) {
+  return teamId === "b" ? "#2563eb" : "#dc2626";
+}
 
 export function formatHpPct(maxHP: number, hp: number) {
   return `${Math.max(0, Math.min(100, (hp / maxHP) * 100))}%`;
@@ -74,6 +91,29 @@ function avatarFallback(
   return (value || fallback).slice(0, 1).toUpperCase();
 }
 
+function fallbackPlayerIdentity(params: {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  fallback: string;
+  isAdmin?: boolean;
+  selectedBadge?: PlayerIdentityView["selectedBadge"];
+  isGuest?: boolean;
+  rating?: number;
+}): PlayerIdentityView {
+  return {
+    kind: "player",
+    id: params.id,
+    name: params.name,
+    avatarUrl: params.avatarUrl,
+    avatarFallback: params.fallback,
+    isAdmin: params.isAdmin,
+    selectedBadge: params.selectedBadge,
+    isGuest: params.isGuest,
+    rating: params.rating,
+  };
+}
+
 export function deriveHomeModel({
   auth,
   match,
@@ -93,11 +133,22 @@ export function deriveHomeModel({
     routeMatchId && match.snapshot?.matchId === routeMatchId
       ? match.snapshot
       : null;
-  const mode = snapshot?.mode === "singleplayer" ? "singleplayer" : "duel";
+  const mode =
+    snapshot?.mode === "singleplayer" ||
+    snapshot?.mode === "team_duel" ||
+    snapshot?.mode === "free_for_all"
+      ? snapshot.mode
+      : "duel";
   const isSingleplayer = mode === "singleplayer";
+  const isTeamDuel = mode === "team_duel";
+  const isFreeForAll = mode === "free_for_all";
+  const isPointsMode = isSingleplayer || isFreeForAll;
   const playerIds = Object.keys(snapshot?.players || {});
   const selfId = auth.userId;
-  const oppId = playerIds.find((id) => id !== selfId) || "";
+  const selfTeamId = snapshot?.players?.[selfId]?.teamId || "a";
+  const oppId = isTeamDuel
+    ? playerIds.find((id) => (snapshot?.players?.[id]?.teamId || "a") !== selfTeamId) || ""
+    : playerIds.find((id) => id !== selfId) || "";
   const derivedUIPhase = deriveUIPhase({
     snapshot,
     status: match.matchmaking.status,
@@ -160,10 +211,13 @@ export function deriveHomeModel({
   const ss = !hideRoundClock
     ? String(game.displayRoundSeconds % 60).padStart(2, "0")
     : "--";
+  const selfTeamHP = isTeamDuel ? snapshot?.teams?.[selfTeamId]?.hp : undefined;
+  const oppTeamId = isTeamDuel ? Object.keys(snapshot?.teams || {}).find((teamId) => teamId !== selfTeamId) || "" : "";
+  const oppTeamHP = isTeamDuel && oppTeamId ? snapshot?.teams?.[oppTeamId]?.hp : undefined;
   const liveSelfHP =
-    game.displayHP[selfId] ?? snapshot?.players?.[selfId]?.hp ?? 0;
+    selfTeamHP ?? game.displayHP[selfId] ?? snapshot?.players?.[selfId]?.hp ?? 0;
   const liveOppHP =
-    game.displayHP[oppId] ?? snapshot?.players?.[oppId]?.hp ?? 0;
+    oppTeamHP ?? game.displayHP[oppId] ?? snapshot?.players?.[oppId]?.hp ?? 0;
   const totalScore = snapshot?.players?.[selfId]?.totalScore ?? 0;
   const selfHP = showResultStage ? game.resultShownHP.self : liveSelfHP;
   const oppHP = showResultStage ? game.resultShownHP.opp : liveOppHP;
@@ -172,11 +226,26 @@ export function deriveHomeModel({
   const oppPlayer = oppId ? snapshot?.players?.[oppId] : undefined;
   const matchConfig = snapshot?.config || {};
   const ruleset = matchConfig.ruleset === "nmpz" ? "nmpz" : "moving";
+  const pressureTimeLimitMs =
+    typeof matchConfig.pressureTimeLimitMs === "number" &&
+    matchConfig.pressureTimeLimitMs > 0
+      ? matchConfig.pressureTimeLimitMs
+      : matchConfig.roundTimerMode === "pressure"
+        ? DEFAULT_PRESSURE_TIME_MS
+        : 0;
+  const finalizedCount = Object.values(snapshot?.players || {}).filter((player) => player.finalized).length;
+  const playerCount = Object.keys(snapshot?.players || {}).length;
+  const pressureTimerActive =
+    pressureTimeLimitMs > 0 &&
+    finalizedCount > 0 &&
+    finalizedCount < playerCount;
   const roundTimeLimitMs =
-    matchConfig.roundTimerMode === "fixed" &&
-    typeof matchConfig.roundTimeLimitMs === "number"
-      ? matchConfig.roundTimeLimitMs
-      : config.roundDurationMs;
+    pressureTimerActive
+      ? pressureTimeLimitMs
+      : matchConfig.roundTimerMode === "fixed" &&
+          typeof matchConfig.roundTimeLimitMs === "number"
+        ? matchConfig.roundTimeLimitMs
+        : config.roundDurationMs;
   const streetViewSrc = buildStreetViewSrc(snapshot, config.googleEmbedKey);
   const selfQueueName = getSelfQueueName({
     displayName: auth.displayName,
@@ -190,24 +259,29 @@ export function deriveHomeModel({
       : "") ||
     selfQueueName ||
     "You";
-  const opponentName = oppPlayer?.displayName || "Opponent";
+  const opponentName = isTeamDuel ? teamName(oppTeamId) : isFreeForAll ? "Players" : oppPlayer?.displayName || "Opponent";
+  const displaySelfName = isTeamDuel ? teamName(selfTeamId) : selfName;
   const selfElo = selfPlayer?.mmr || auth.mmr;
   const opponentElo = oppPlayer?.mmr || INITIAL_MMR;
   const selfIsAdmin = !!(selfPlayer?.isAdmin ?? auth.isAdmin);
   const opponentIsAdmin = !!oppPlayer?.isAdmin;
+  const selfSelectedBadge = selfPlayer?.selectedBadge || auth.selectedBadge || null;
+  const opponentSelectedBadge = oppPlayer?.selectedBadge || null;
   const opponentDisconnected = !!oppPlayer?.disconnected;
-  const selfAvatarUrl = selfPlayer?.avatarUrl || auth.userAvatar;
-  const oppAvatarUrl = oppPlayer?.avatarUrl || "";
+  const selfAvatarUrl = isTeamDuel ? "" : selfPlayer?.avatarUrl || auth.userAvatar;
+  const oppAvatarUrl = isTeamDuel ? "" : oppPlayer?.avatarUrl || "";
   const selfHasNoLinkedAccount =
     !auth.userEmail || !!(selfPlayer?.isGuest ?? auth.isGuest);
-  const selfFallback = avatarFallback(
-    selfName || auth.userEmail,
-    "Y",
-    selfHasNoLinkedAccount,
-  );
+  const selfFallback = isTeamDuel
+    ? teamFallback(selfTeamId)
+    : avatarFallback(
+        selfName || auth.userEmail,
+        "Y",
+        selfHasNoLinkedAccount,
+      );
   const oppFallback = avatarFallback(
-    oppId || opponentName,
-    "O",
+    isTeamDuel ? teamFallback(oppTeamId) : oppId || opponentName,
+    isTeamDuel ? teamFallback(oppTeamId) : "O",
     !!oppPlayer?.isGuest,
   );
   const resultPlayerAvatars: Record<string, string | undefined> = {};
@@ -223,51 +297,116 @@ export function deriveHomeModel({
     );
   });
 
+  const participantsById: Record<string, ParticipantIdentityView> = {};
+  Object.entries(snapshot?.players || {}).forEach(([id, player]) => {
+    participantsById[id] = fallbackPlayerIdentity({
+      id,
+      name: resultPlayerNames[id] || player.userId,
+      avatarUrl: player.avatarUrl,
+      fallback: resultPlayerFallbacks[id] || "P",
+      isAdmin: player.isAdmin,
+      selectedBadge: player.selectedBadge,
+      isGuest: player.isGuest,
+      rating: player.mmr,
+    });
+  });
+  const selfPlayerIdentity =
+    (participantsById[selfId] as PlayerIdentityView | undefined) ||
+    fallbackPlayerIdentity({
+      id: selfId || "self",
+      name: selfName,
+      avatarUrl: auth.userAvatar,
+      fallback: selfFallback,
+      isAdmin: selfIsAdmin,
+      selectedBadge: selfSelectedBadge,
+      isGuest: selfHasNoLinkedAccount,
+      rating: selfElo,
+    });
+  const opponentPlayerIdentity =
+    (oppId ? (participantsById[oppId] as PlayerIdentityView | undefined) : undefined) ||
+    fallbackPlayerIdentity({
+      id: oppId || "opponent",
+      name: opponentName,
+      avatarUrl: oppAvatarUrl,
+      fallback: oppFallback,
+      isAdmin: opponentIsAdmin,
+      selectedBadge: opponentSelectedBadge,
+      isGuest: !!oppPlayer?.isGuest,
+      rating: opponentElo,
+    });
+  const selfParticipant: ParticipantIdentityView = isTeamDuel
+    ? {
+        kind: "team",
+        id: selfTeamId,
+        name: displaySelfName,
+        avatarFallback: teamFallback(selfTeamId),
+        avatarColor: teamColor(selfTeamId),
+        members: Object.values(participantsById).filter(
+          (participant): participant is PlayerIdentityView =>
+            participant.kind === "player" &&
+            snapshot?.players?.[participant.id]?.teamId === selfTeamId,
+        ),
+        hp: selfTeamHP,
+      }
+    : selfPlayerIdentity;
+  const opponentParticipant: ParticipantIdentityView = isTeamDuel
+    ? {
+        kind: "team",
+        id: oppTeamId || "opponent",
+        name: opponentName,
+        avatarFallback: teamFallback(oppTeamId),
+        avatarColor: teamColor(oppTeamId),
+        members: Object.values(participantsById).filter(
+          (participant): participant is PlayerIdentityView =>
+            participant.kind === "player" &&
+            snapshot?.players?.[participant.id]?.teamId === oppTeamId,
+        ),
+        hp: oppTeamHP,
+      }
+    : opponentPlayerIdentity;
+
   const resultSelf =
     roundResult && selfId ? roundResult.players[selfId] : undefined;
   const resultOpp =
     roundResult && oppId ? roundResult.players[oppId] : undefined;
+  const resultSelfTeam =
+    isTeamDuel && roundResult ? roundResult.teams?.[selfTeamId] : undefined;
+  const resultOppTeam =
+    isTeamDuel && roundResult && oppTeamId ? roundResult.teams?.[oppTeamId] : undefined;
+  const overlaySelfScore = resultSelfTeam?.score ?? resultSelf?.score;
+  const overlayOppScore = resultOppTeam?.score ?? resultOpp?.score;
+  const overlaySelfDistanceKm = resultSelfTeam?.distanceKm ?? resultSelf?.distanceKm;
+  const overlayOppDistanceKm = resultOppTeam?.distanceKm ?? resultOpp?.distanceKm;
   const currentRoundScore = resultSelf?.score || 0;
   const currentRoundDistanceKm = resultSelf?.distanceKm || 0;
   const resultWinner: "self" | "opp" | "tie" =
-    isSingleplayer || !resultSelf || !resultOpp
+    isPointsMode || overlaySelfScore === undefined || overlayOppScore === undefined
       ? "tie"
-      : resultSelf.score === resultOpp.score
+      : overlaySelfScore === overlayOppScore
         ? "tie"
-        : resultSelf.score > resultOpp.score
+        : overlaySelfScore > overlayOppScore
           ? "self"
           : "opp";
   const resultDamage =
-    isSingleplayer || !resultSelf || !resultOpp
+    isPointsMode || overlaySelfScore === undefined || overlayOppScore === undefined
       ? 0
-      : Math.abs(resultSelf.score - resultOpp.score);
+      : Math.abs(overlaySelfScore - overlayOppScore);
   const showScoreReveal = game.resultPhase !== "base";
-  const hudStatusLabel = isSingleplayer
-    ? showResultStage
-      ? "Round Result"
-      : "Singleplayer"
-    : showResultStage
-      ? "Round Result"
-      : match.matchmaking.status;
-  const showHudStatus =
-    !!hudStatusLabel && hudStatusLabel.toLowerCase() !== "matched";
   const isTimerCritical =
     isRoundTimerRunning &&
-    !isSingleplayer &&
     snapshot?.phase === "live" &&
     game.roundMSLeft <= 15_000;
   const isTimerPulseActive =
     isRoundTimerRunning &&
-    !isSingleplayer &&
     snapshot?.phase === "live" &&
     game.roundMSLeft < 5_000;
   const timerProgressPct =
-    isRoundTimerRunning && !isSingleplayer && snapshot?.phase === "live"
+    isRoundTimerRunning && roundTimeLimitMs > 0 && snapshot?.phase === "live"
       ? Math.max(0, Math.min(100, (game.roundMSLeft / roundTimeLimitMs) * 100))
       : 100;
   const matchOutcome: "win" | "lose" | "draw" =
     selfHP === oppHP ? "draw" : selfHP > oppHP ? "win" : "lose";
-  const isRankedDuel = !isSingleplayer && !snapshot?.unranked;
+  const isRankedDuel = mode === "duel" && !snapshot?.unranked;
   const selfRatingPreview =
     isRankedDuel && selfId ? snapshot?.ratingPreview?.[selfId] : undefined;
   const opponentRatingPreview =
@@ -300,7 +439,7 @@ export function deriveHomeModel({
         : opponentRatingPreview?.draw;
 
   let resultOverlay: Omit<RoundResultOverlayProps, "mapNode"> | undefined;
-  if (roundResult && !isSingleplayer) {
+  if (roundResult && !isPointsMode) {
     resultOverlay = {
       roundNumber: roundResult.roundNumber,
       phase: game.resultPhase,
@@ -310,20 +449,20 @@ export function deriveHomeModel({
       damageMultiplier,
       players: {
         self: {
-          name: selfName,
+          name: displaySelfName,
           avatarUrl: selfAvatarUrl,
           fallback: selfFallback,
           hp: game.resultShownHP.self,
-          score: resultSelf?.score,
-          distanceKm: resultSelf?.distanceKm,
+          score: overlaySelfScore,
+          distanceKm: overlaySelfDistanceKm,
         },
         opp: {
           name: opponentName,
           avatarUrl: oppAvatarUrl,
           fallback: oppFallback,
           hp: game.resultShownHP.opp,
-          score: resultOpp?.score,
-          distanceKm: resultOpp?.distanceKm,
+          score: overlayOppScore,
+          distanceKm: overlayOppDistanceKm,
         },
       },
       hpPct: (hp) => formatHpPct(config.maxHP, hp),
@@ -341,13 +480,15 @@ export function deriveHomeModel({
       authMigrationRequired: auth.authMigrationRequired,
       recoveryAvailable: auth.recoveryAvailable,
       linkedProviders: auth.linkedProviders,
+      badges: auth.badges,
+      selectedBadge: auth.selectedBadge,
       canPlay: auth.canPlay,
       nicknameInput: auth.nicknameInput,
       nicknameError: auth.nicknameError,
       nicknameSaving: auth.nicknameSaving,
       authLoading: auth.authLoading,
       authError: auth.authError,
-      googleRecoveryEnabled: auth.googleRecoveryEnabled,
+      googleSignInEnabled: auth.googleSignInEnabled,
       googleClientId: auth.googleClientId,
       discordSignInEnabled: auth.discordSignInEnabled,
       discordClientId: auth.discordClientId,
@@ -385,6 +526,7 @@ export function deriveHomeModel({
       inGame,
       mode,
       isSingleplayer,
+      isPointsMode,
       uiPhase,
       showResultStage,
       showMatchEndPage: game.showMatchEndPage,
@@ -394,23 +536,29 @@ export function deriveHomeModel({
       resultOverlay,
       resultPlayerAvatars,
       resultPlayerFallbacks,
-      selfName,
+      resultPlayerNames,
+      participantsById,
+      selfParticipant,
+      opponentParticipant,
+      selfName: displaySelfName,
       selfAvatarUrl,
       selfFallback,
+      selfAvatarColor: isTeamDuel ? teamColor(selfTeamId) : undefined,
       selfIsAdmin,
+      selfSelectedBadge,
       opponentName,
       opponentIsAdmin,
+      opponentSelectedBadge,
       opponentDisconnected,
       oppAvatarUrl,
       oppFallback,
+      oppAvatarColor: isTeamDuel ? teamColor(oppTeamId) : undefined,
       mm,
       ss,
       isRoundTimerRunning,
       timerProgressPct,
       isTimerCritical,
       isTimerPulseActive,
-      showHudStatus,
-      hudStatusLabel,
       resultMode,
       selfHP,
       oppHP,
@@ -422,7 +570,7 @@ export function deriveHomeModel({
       guess: game.guess,
       currentRoundId: snapshot?.currentRound?.roundId || "",
       currentRoundNumber,
-      totalRounds: isSingleplayer ? SINGLEPLAYER_TOTAL_ROUNDS : undefined,
+      totalRounds: isSingleplayer || isFreeForAll ? SINGLEPLAYER_TOTAL_ROUNDS : undefined,
       userAvatar: auth.userAvatar,
       selfElo,
       opponentElo,
@@ -430,10 +578,14 @@ export function deriveHomeModel({
       opponentRatingPreview,
       damageMultiplier,
       guessSubmitted: game.guessSubmitted,
-      opponentGuessAlert: isSingleplayer ? false : game.opponentGuessAlert,
+      opponentGuessAlert: isPointsMode ? false : game.opponentGuessAlert,
       connectionIssue: match.connectionIssue,
       modeName: isSingleplayer
         ? "Practice"
+        : isTeamDuel
+          ? "Team Duel"
+          : isFreeForAll
+            ? "Free for All"
         : ruleset === "nmpz"
           ? "NMPZ"
           : "Moving",
@@ -450,29 +602,36 @@ export function deriveHomeModel({
           ? {
               open: true,
               mode,
-              outcome: isSingleplayer ? undefined : matchOutcome,
+              outcome: isPointsMode ? undefined : matchOutcome,
               selfName,
-              opponentName: isSingleplayer ? undefined : opponentName,
-              opponentUserId: isSingleplayer ? undefined : oppId,
-              selfElo: isSingleplayer ? undefined : selfElo,
-              opponentElo: isSingleplayer ? undefined : opponentElo,
+              opponentName: isPointsMode ? undefined : opponentName,
+              opponentUserId: isPointsMode ? undefined : oppId,
+              selfElo: isPointsMode ? undefined : selfElo,
+              opponentElo: isPointsMode ? undefined : opponentElo,
               selfEloDelta: selfReceivesEloDelta ? selfEloDelta : undefined,
               opponentEloDelta: opponentReceivesEloDelta
                 ? opponentEloDelta
                 : undefined,
               selfHP,
-              oppHP: isSingleplayer ? undefined : oppHP,
+              oppHP: isPointsMode ? undefined : oppHP,
               selfAvatarUrl,
-              oppAvatarUrl: isSingleplayer ? undefined : oppAvatarUrl,
+              oppAvatarUrl: isPointsMode ? undefined : oppAvatarUrl,
               selfFallback,
-              oppFallback: isSingleplayer ? undefined : oppFallback,
+              oppFallback: isPointsMode ? undefined : oppFallback,
+              selfAvatarColor: isTeamDuel ? teamColor(selfTeamId) : undefined,
+              oppAvatarColor: isTeamDuel && oppTeamId ? teamColor(oppTeamId) : undefined,
               selfIsAdmin,
-              opponentIsAdmin: isSingleplayer ? undefined : opponentIsAdmin,
+              opponentIsAdmin: isPointsMode ? undefined : opponentIsAdmin,
+              selfSelectedBadge,
+              opponentSelectedBadge: isPointsMode ? undefined : opponentSelectedBadge,
               totalScore,
               roundResults,
               resultPlayerNames,
               resultPlayerAvatars,
               resultPlayerFallbacks,
+              participantsById,
+              selfParticipant,
+              opponentParticipant,
             }
           : { open: false },
     },

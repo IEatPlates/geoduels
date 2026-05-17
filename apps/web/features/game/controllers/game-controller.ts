@@ -271,12 +271,20 @@ export class GameController extends ObservableStore<GameState> {
 
   private syncPressureTimerCap(snapshot: Snapshot | null) {
     if (!snapshot || snapshot.mode === 'singleplayer' || snapshot.phase !== 'live' || snapshot.roundPhase !== 'round_live') return;
+    if (!this.hasPressureTimer(snapshot)) return;
     const roundId = snapshot.currentRound?.roundId || '';
     if (!roundId) return;
     const finalizedCount = Object.values(snapshot.players || {}).filter((player) => player.finalized).length;
     if (finalizedCount > 0 && finalizedCount < Object.keys(snapshot.players || {}).length) {
       this.roundClock.forceRound(roundId);
     }
+  }
+
+  private hasPressureTimer(snapshot: Snapshot) {
+    return (
+      (typeof snapshot.config?.pressureTimeLimitMs === 'number' && snapshot.config.pressureTimeLimitMs > 0) ||
+      snapshot.config?.roundTimerMode === 'pressure'
+    );
   }
 
   private syncIntroCountdownSfx(snapshot: Snapshot, displayRoundSeconds: number) {
@@ -343,7 +351,7 @@ export class GameController extends ObservableStore<GameState> {
 
   private syncDisplayHP(snapshot: Snapshot | null) {
     if (!snapshot) return;
-    if (snapshot.mode === 'singleplayer') {
+    if (snapshot.mode === 'singleplayer' || snapshot.mode === 'free_for_all') {
       const totalScore = snapshot.players[this.sessionController.getState().userId]?.totalScore || 0;
       this.patchState({ displayHP: { [this.sessionController.getState().userId]: totalScore } });
       this.prevSeq = snapshot.eventSequence;
@@ -389,7 +397,7 @@ export class GameController extends ObservableStore<GameState> {
       this.resultAnimation.clear();
       return;
     }
-    if (snapshot.mode === 'singleplayer') {
+    if (snapshot.mode === 'singleplayer' || snapshot.mode === 'free_for_all') {
       const totalScore = snapshot.players[userId]?.totalScore || 0;
       if (this.resultAnimRound === snapshot.lastRoundResult.roundId) return;
       this.resultAnimation.clear();
@@ -403,16 +411,24 @@ export class GameController extends ObservableStore<GameState> {
       });
       return;
     }
-    if (!(snapshot.phase === 'round_result' || snapshot.state === 'ended')) {
+    if (
+      (snapshot.mode && snapshot.mode !== 'duel' && snapshot.mode !== 'team_duel') ||
+      !(snapshot.phase === 'round_result' || snapshot.state === 'ended')
+    ) {
       this.resultAnimation.clear();
       return;
     }
     const playerIds = Object.keys(snapshot.players || {});
-    const oppId = playerIds.find((id) => id !== userId) || '';
+    const selfTeamId = snapshot.players[userId]?.teamId || 'a';
+    const oppId =
+      snapshot.mode === 'team_duel'
+        ? playerIds.find((id) => (snapshot.players[id]?.teamId || 'a') !== selfTeamId) || ''
+        : playerIds.find((id) => id !== userId) || '';
     const rr = snapshot.lastRoundResult;
     if (this.resultAnimRound === rr.roundId) return;
-    const selfResult = rr.players[userId];
-    const oppResult = rr.players[oppId];
+    const oppTeamId = snapshot.mode === 'team_duel' ? snapshot.players[oppId]?.teamId || 'b' : '';
+    const selfResult = snapshot.mode === 'team_duel' ? rr.teams?.[selfTeamId] : rr.players[userId];
+    const oppResult = snapshot.mode === 'team_duel' ? rr.teams?.[oppTeamId] : rr.players[oppId];
     if (!selfResult || !oppResult) return;
 
     this.resultAnimation.clear();
@@ -458,7 +474,7 @@ export class GameController extends ObservableStore<GameState> {
 
   private syncRecoveredEndedMatch(snapshot: Snapshot | null, userId: string) {
     if (!snapshot || snapshot.state !== 'ended' || snapshot.lastRoundResult || this.state.showMatchEndPage) return;
-    if (snapshot.mode === 'singleplayer') {
+    if (snapshot.mode === 'singleplayer' || snapshot.mode === 'free_for_all') {
       this.patchState({
         resultPhase: 'hp_apply',
         showMatchEndPage: false,
@@ -482,7 +498,7 @@ export class GameController extends ObservableStore<GameState> {
   }
 
   private syncOpponentFinalized(prev: Snapshot | null, next: Snapshot | null, userId: string) {
-    if (next?.mode === 'singleplayer') return;
+    if (next?.mode !== 'duel' || !this.hasPressureTimer(next)) return;
     if (!prev || !next) return;
     const ids = Object.keys(next.players || {});
     const oppId = ids.find((id) => id !== userId) || '';

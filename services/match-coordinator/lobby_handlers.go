@@ -18,6 +18,7 @@ import (
 
 	"geoduels/pkg/contracts"
 	"geoduels/pkg/coordinator"
+	"geoduels/pkg/lobbyevents"
 	"geoduels/pkg/matchlaunch"
 	"geoduels/pkg/observability"
 	"geoduels/pkg/sessionpolicy"
@@ -57,7 +58,9 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1024)
 	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
 	conn.SetPongHandler(func(string) error {
-		q.touchLobbyPresence(lobbyID, claims.Sub, connID)
+		if q.touchLobbyPresence(lobbyID, claims.Sub, connID) {
+			q.publishLobbyChanged(r.Context(), lobbyID)
+		}
 		return conn.SetReadDeadline(time.Now().Add(70 * time.Second))
 	})
 	go func() {
@@ -69,12 +72,71 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	var writeMu sync.Mutex
-	q.touchLobbyPresence(lobbyID, claims.Sub, connID)
-	q.writeLobbySnapshot(conn, &writeMu, snap)
+	var lobbyEvents <-chan *redis.Message
+	if q.redis != nil {
+		pubsub := q.redis.Subscribe(ctx, lobbyevents.Channel(lobbyID))
+		defer pubsub.Close()
+		if _, err := pubsub.Receive(ctx); err != nil {
+			observability.Log("warn", "lobby event subscribe failed", map[string]any{"lobbyId": lobbyID, "error": err.Error()})
+		} else {
+			lobbyEvents = pubsub.Channel()
+		}
+	}
 
-	pollTicker := time.NewTicker(750 * time.Millisecond)
-	defer pollTicker.Stop()
+	var writeMu sync.Mutex
+	if q.touchLobbyPresence(lobbyID, claims.Sub, connID) {
+		q.publishLobbyChanged(r.Context(), lobbyID)
+	}
+	if latest, ok, err := q.persist.GetLobbyByID(lobbyID); err != nil || !ok {
+		q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "Lobby unavailable"})
+		return
+	} else {
+		snap = q.lobbySettings.Apply(ctx, latest)
+		if !lobbyHasMember(snap, claims.Sub) {
+			q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "You left this lobby"})
+			return
+		}
+	}
+	q.applyLobbyPresence(&snap)
+	q.writeLobbySnapshot(conn, &writeMu, snap)
+	lastLobby := snap
+	lastLobbyFingerprint := lobbyFingerprint(snap)
+	revision := int64(1)
+
+	refreshLobby := func() bool {
+		next, ok, err := q.persist.GetLobbyByID(lobbyID)
+		if err != nil || !ok {
+			q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "Lobby unavailable"})
+			return false
+		}
+		next = q.lobbySettings.Apply(ctx, next)
+		q.applyLobbyPresence(&next)
+		if !lobbyHasMember(next, claims.Sub) {
+			q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "You left this lobby"})
+			return false
+		}
+		nextFingerprint := lobbyFingerprint(next)
+		if nextFingerprint != lastLobbyFingerprint {
+			revision++
+			q.writeLobbyPatch(conn, &writeMu, lobbyPatch(lastLobby, next, revision))
+			lastLobby = next
+			lastLobbyFingerprint = nextFingerprint
+		}
+		activeMatchID := next.ActiveMatchID
+		if activeMatchID == "" {
+			activeMatchID = next.StartedMatchID
+		}
+		if (next.State == contracts.LobbyInMatch || next.State == contracts.LobbyStarted) && activeMatchID != "" {
+			if assigned, ok, err := q.state.GetAssignmentByMatch(ctx, activeMatchID); err == nil && ok {
+				if payload, ok, err := q.launcher().AssignedPayload(claims.Sub, assigned); err == nil && ok {
+					q.writeQueueMessage(conn, &writeMu, "match_assigned", payload)
+					return false
+				}
+			}
+		}
+		return next.State == contracts.LobbyOpen
+	}
+
 	presenceTicker := time.NewTicker(10 * time.Second)
 	defer presenceTicker.Stop()
 	pingTicker := time.NewTicker(20 * time.Second)
@@ -83,35 +145,20 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-pollTicker.C:
-			next, ok, err := q.persist.GetLobbyByID(lobbyID)
-			if err != nil || !ok {
-				q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "Lobby unavailable"})
+		case event, ok := <-lobbyEvents:
+			if !ok {
 				return
 			}
-			next = q.lobbySettings.Apply(ctx, next)
-			if !lobbyHasMember(next, claims.Sub) {
-				q.writeQueueMessage(conn, &writeMu, "lobby_error", map[string]string{"message": "You left this lobby"})
-				return
+			if event == nil || event.Payload != lobbyevents.KindChanged {
+				continue
 			}
-			q.writeLobbySnapshot(conn, &writeMu, next)
-			activeMatchID := next.ActiveMatchID
-			if activeMatchID == "" {
-				activeMatchID = next.StartedMatchID
-			}
-			if (next.State == contracts.LobbyInMatch || next.State == contracts.LobbyStarted) && activeMatchID != "" {
-				if assigned, ok, err := q.state.GetAssignmentByMatch(ctx, activeMatchID); err == nil && ok {
-					if payload, ok, err := q.launcher().AssignedPayload(claims.Sub, assigned); err == nil && ok {
-						q.writeQueueMessage(conn, &writeMu, "match_assigned", payload)
-						return
-					}
-				}
-			}
-			if next.State != contracts.LobbyOpen {
+			if !refreshLobby() {
 				return
 			}
 		case <-presenceTicker.C:
-			q.touchLobbyPresence(lobbyID, claims.Sub, connID)
+			if q.touchLobbyPresence(lobbyID, claims.Sub, connID) {
+				q.publishLobbyChanged(r.Context(), lobbyID)
+			}
 		case <-pingTicker.C:
 			if !q.writeQueuePing(conn, &writeMu) {
 				return
@@ -158,7 +205,7 @@ func (q *matchCoordinator) startLobby(w http.ResponseWriter, r *http.Request) {
 			mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)
 			switch q.launcher().ValidateAssignment(r.Context(), assigned) {
 			case matchlaunch.AssignmentValid, matchlaunch.AssignmentPending:
-				if mode == contracts.ModeDuel {
+				if contracts.IsPrivatePartyMode(mode) {
 					http.Error(w, activeLobbyMatchConflict(userID, assigned, found.Profiles[userID]), http.StatusConflict)
 					return
 				}
@@ -178,6 +225,7 @@ func (q *matchCoordinator) startLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby start failed", http.StatusConflict)
 		return
 	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
 	payload, ok, err := q.launcher().AssignedPayload(claims.Sub, assigned)
 	if err != nil || !ok {
 		http.Error(w, "unable to issue gameplay ticket", http.StatusBadGateway)
@@ -254,33 +302,57 @@ func (q *matchCoordinator) lobbyMatchFound(snap contracts.LobbySnapshot) (contra
 			active = append(active, member)
 		}
 	}
-	if len(active) != 2 {
-		return contracts.MatchFound{}, errors.New("duel lobby requires exactly two players")
+	if len(active) < 2 || len(active) > 8 {
+		return contracts.MatchFound{}, errors.New("lobby requires 2 to 8 players")
+	}
+	switch snap.Mode {
+	case contracts.ModeDuel:
+		if len(active) != 2 {
+			return contracts.MatchFound{}, errors.New("duel lobby requires exactly two players")
+		}
+	case contracts.ModeTeamDuel:
+		teamCounts := map[string]int{}
+		for _, member := range active {
+			teamCounts[normalizeLobbyTeam(member.TeamID)]++
+		}
+		if teamCounts["a"] == 0 || teamCounts["b"] == 0 {
+			return contracts.MatchFound{}, errors.New("team duel requires players on both teams")
+		}
+	case contracts.ModeFreeForAll:
+	default:
+		return contracts.MatchFound{}, errors.New("unsupported lobby mode")
 	}
 	match := contracts.MatchFound{
 		MatchID:               "m-" + strconvTimeID(),
-		Mode:                  contracts.ModeDuel,
+		Mode:                  snap.Mode,
 		Unranked:              true,
-		Players:               []string{active[0].UserID, active[1].UserID},
+		Players:               []string{},
 		Profiles:              map[string]contracts.PlayerProfile{},
+		Teams:                 map[string]string{},
 		Config:                contracts.NormalizeMatchConfig(snap.Config),
 		MapScope:              defaultLobbyMapScope(snap.MapScope),
 		SourceLobbyID:         snap.ID,
 		SourceLobbyInviteCode: snap.InviteCode,
 	}
 	for _, member := range active {
+		match.Players = append(match.Players, member.UserID)
+		if snap.Mode == contracts.ModeTeamDuel {
+			match.Teams[member.UserID] = normalizeLobbyTeam(member.TeamID)
+		}
 		match.Profiles[member.UserID] = contracts.PlayerProfile{
-			UserID:      member.UserID,
-			DisplayName: member.DisplayName,
-			AvatarURL:   member.AvatarURL,
-			IsGuest:     member.IsGuest,
-			IsAdmin:     member.IsAdmin,
+			UserID:        member.UserID,
+			DisplayName:   member.DisplayName,
+			AvatarURL:     member.AvatarURL,
+			IsGuest:       member.IsGuest,
+			IsAdmin:       member.IsAdmin,
+			SelectedBadge: member.SelectedBadge,
 		}
 		if profile, err := q.persist.GetProfile(member.UserID); err == nil {
 			player := match.Profiles[member.UserID]
 			player.MMR = profile.MMR
 			player.RatingRD = profile.RatingRD
 			player.RankedGamesPlayed = profile.RankedGamesPlayed
+			player.SelectedBadge = profile.SelectedBadge
 			match.Profiles[member.UserID] = player
 		}
 	}
@@ -292,30 +364,49 @@ func (q *matchCoordinator) writeLobbySnapshot(conn *websocket.Conn, writeMu *syn
 	return q.writeQueueMessage(conn, writeMu, "lobby_snapshot", snap)
 }
 
-func (q *matchCoordinator) touchLobbyPresence(lobbyID, userID, connID string) {
+func (q *matchCoordinator) writeLobbyPatch(conn *websocket.Conn, writeMu *sync.Mutex, patch contracts.LobbyPatch) bool {
+	return q.writeQueueMessage(conn, writeMu, "lobby_patch", patch)
+}
+
+func (q *matchCoordinator) touchLobbyPresence(lobbyID, userID, connID string) bool {
 	if q.redis == nil || strings.TrimSpace(lobbyID) == "" || strings.TrimSpace(userID) == "" {
-		return
+		return false
 	}
 	key := "lobby:presence:" + lobbyID
 	now := time.Now().UnixMilli()
 	field := lobbyPresenceField(userID, connID)
+	var addedCmd *redis.IntCmd
 	_, err := q.redis.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
-		pipe.HSet(context.Background(), key, field, now)
+		addedCmd = pipe.HSet(context.Background(), key, field, now)
 		pipe.Expire(context.Background(), key, lobbyPresenceTTL)
 		return nil
 	})
 	if err != nil {
 		observability.Log("warn", "lobby presence touch failed", map[string]any{"lobbyId": lobbyID, "userId": userID, "error": err.Error()})
+		return false
 	}
+	return addedCmd != nil && addedCmd.Val() > 0
 }
 
 func (q *matchCoordinator) clearLobbyPresence(lobbyID, userID, connID string) {
 	if q.redis == nil || strings.TrimSpace(lobbyID) == "" || strings.TrimSpace(userID) == "" {
 		return
 	}
-	if err := q.redis.HDel(context.Background(), "lobby:presence:"+lobbyID, lobbyPresenceField(userID, connID)).Err(); err != nil {
+	removed, err := q.redis.HDel(context.Background(), "lobby:presence:"+lobbyID, lobbyPresenceField(userID, connID)).Result()
+	if err != nil {
 		observability.Log("warn", "lobby presence clear failed", map[string]any{"lobbyId": lobbyID, "userId": userID, "error": err.Error()})
+		return
 	}
+	if removed > 0 {
+		q.publishLobbyChanged(context.Background(), lobbyID)
+	}
+}
+
+func (q *matchCoordinator) publishLobbyChanged(ctx context.Context, lobbyID string) {
+	if q.redis == nil || strings.TrimSpace(lobbyID) == "" {
+		return
+	}
+	_ = q.redis.Publish(ctx, lobbyevents.Channel(lobbyID), lobbyevents.KindChanged).Err()
 }
 
 func (q *matchCoordinator) applyLobbyPresence(snap *contracts.LobbySnapshot) {
@@ -356,6 +447,74 @@ func requireLobbyPresence(snap contracts.LobbySnapshot) error {
 		return errors.New("all players must be in the lobby to start: " + strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+func lobbyFingerprint(snap contracts.LobbySnapshot) string {
+	b, _ := json.Marshal(snap)
+	return string(b)
+}
+
+func lobbyPatch(prev, next contracts.LobbySnapshot, revision int64) contracts.LobbyPatch {
+	patch := contracts.LobbyPatch{Revision: revision}
+	if prev.State != next.State {
+		v := next.State
+		patch.State = &v
+	}
+	if prev.OwnerUserID != next.OwnerUserID {
+		v := next.OwnerUserID
+		patch.OwnerUserID = &v
+	}
+	if prev.Mode != next.Mode {
+		v := next.Mode
+		patch.Mode = &v
+	}
+	if prev.Config != next.Config {
+		v := next.Config
+		patch.Config = &v
+	}
+	if prev.ActiveMatchID != next.ActiveMatchID {
+		v := next.ActiveMatchID
+		patch.ActiveMatchID = &v
+	}
+	if prev.LastMatchID != next.LastMatchID {
+		v := next.LastMatchID
+		patch.LastMatchID = &v
+	}
+	if prev.StartedMatchID != next.StartedMatchID {
+		v := next.StartedMatchID
+		patch.StartedMatchID = &v
+	}
+	prevMembers := map[string]contracts.LobbyMember{}
+	nextMembers := map[string]contracts.LobbyMember{}
+	for _, member := range prev.Members {
+		prevMembers[member.UserID] = member
+	}
+	for _, member := range next.Members {
+		nextMembers[member.UserID] = member
+		if lobbyMemberFingerprint(prevMembers[member.UserID]) != lobbyMemberFingerprint(member) {
+			patch.UpsertMembers = append(patch.UpsertMembers, member)
+		}
+	}
+	for id := range prevMembers {
+		if _, ok := nextMembers[id]; !ok {
+			patch.RemoveMemberIDs = append(patch.RemoveMemberIDs, id)
+		}
+	}
+	return patch
+}
+
+func lobbyMemberFingerprint(member contracts.LobbyMember) string {
+	b, _ := json.Marshal(member)
+	return string(b)
+}
+
+func normalizeLobbyTeam(teamID string) string {
+	switch strings.ToLower(strings.TrimSpace(teamID)) {
+	case "b":
+		return "b"
+	default:
+		return "a"
+	}
 }
 
 func lobbyPresenceField(userID, connID string) string {

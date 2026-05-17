@@ -86,6 +86,89 @@ func TestCreateUnrankedMatchOmitsRatingPreview(t *testing.T) {
 	}
 }
 
+func TestTeamDuelUsesBestGuessPerTeamForSharedHP(t *testing.T) {
+	e := New(func(_ string, _ int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{Lat: 10, Lng: 10, Country: "US"}, nil
+	})
+	m, err := e.CreateMatchWithOptions("m-team", []string{"a1", "a2", "b1"}, nil, MatchOptions{
+		Mode: contracts.ModeTeamDuel,
+		Teams: map[string]string{
+			"a1": "a",
+			"a2": "a",
+			"b1": "b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create team duel: %v", err)
+	}
+	m.RoundStartedAt = time.Now().Add(-roundIntro)
+	snap, err := e.GetSnapshot("m-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundID := snap.CurrentRound.RoundID
+	guesses := []contracts.GuessPayload{
+		{UserID: "a1", MatchID: "m-team", RoundID: roundID, Lat: 80, Lng: 80, Finalize: true},
+		{UserID: "a2", MatchID: "m-team", RoundID: roundID, Lat: 10.01, Lng: 10.01, Finalize: true},
+		{UserID: "b1", MatchID: "m-team", RoundID: roundID, Lat: 50, Lng: 50, Finalize: true},
+	}
+	for _, guess := range guesses {
+		snap, err = e.SubmitGuess(guess)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snap.LastRoundResult == nil || snap.LastRoundResult.Teams["a"].RepresentativeUserID != "a2" {
+		t.Fatalf("expected a2 to represent team a, got %+v", snap.LastRoundResult)
+	}
+	if snap.Teams["b"].HP >= startingHP {
+		t.Fatalf("expected team b hp to drop, got %+v", snap.Teams["b"])
+	}
+	if snap.Players["b1"].HP != snap.Teams["b"].HP {
+		t.Fatalf("expected player hp to mirror team hp")
+	}
+}
+
+func TestFreeForAllAccumulatesPointsAndEndsAfterFiveRounds(t *testing.T) {
+	e := New(func(_ string, _ int) (contracts.LocationPoint, error) {
+		return contracts.LocationPoint{Lat: 10, Lng: 10, Country: "US"}, nil
+	})
+	m, err := e.CreateMatchWithOptions("m-ffa", []string{"u1", "u2", "u3"}, nil, MatchOptions{Mode: contracts.ModeFreeForAll})
+	if err != nil {
+		t.Fatalf("create ffa: %v", err)
+	}
+	var snap *contracts.MatchSnapshot
+	for round := 0; round < ffaRounds; round++ {
+		m.RoundStartedAt = time.Now().Add(-roundIntro)
+		current, err := e.GetSnapshot("m-ffa")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, userID := range []string{"u1", "u2", "u3"} {
+			snap, err = e.SubmitGuess(contracts.GuessPayload{
+				UserID: userID, MatchID: "m-ffa", RoundID: current.CurrentRound.RoundID, Lat: 10, Lng: 10, Finalize: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if round < ffaRounds-1 {
+			e.mu.Lock()
+			e.advanceRound(m)
+			e.mu.Unlock()
+		}
+	}
+	if snap.State != contracts.MatchEnded {
+		t.Fatalf("expected ffa to end after %d rounds, got %s", ffaRounds, snap.State)
+	}
+	if snap.Players["u1"].TotalScore <= 0 || snap.Players["u2"].TotalScore <= 0 {
+		t.Fatalf("expected accumulated scores, got %+v", snap.Players)
+	}
+	if snap.Teams != nil {
+		t.Fatalf("ffa should not expose teams")
+	}
+}
+
 func TestDisconnectResume(t *testing.T) {
 	rounds := []contracts.LocationPoint{{Lat: 1, Lng: 1, Country: "US"}}
 	e := New(func(_ string, _ int) (contracts.LocationPoint, error) { return rounds[0], nil })
@@ -412,6 +495,7 @@ func TestEarlyFinalizeCapsOpponentTimer(t *testing.T) {
 		t.Fatalf("expected timer to start after finalized guess")
 	}
 	remaining := time.Until(next.CurrentRound.RoundDeadline)
+	pressureDuration := time.Duration(contracts.DefaultPressureTimeMS) * time.Millisecond
 	if remaining > pressureDuration+500*time.Millisecond {
 		t.Fatalf("expected timer capped near %s, got %s remaining", pressureDuration, remaining)
 	}

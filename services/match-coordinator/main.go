@@ -228,7 +228,7 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 		mode := sessionpolicy.NormalizeMode(assigned.Mode, assigned.MatchID)
 		switch q.launcher().ValidateAssignment(r.Context(), assigned) {
 		case matchlaunch.AssignmentValid:
-			if mode == contracts.ModeDuel {
+			if contracts.IsPrivatePartyMode(mode) {
 				payload, ok, err := q.launcher().AssignedPayload(userID, assigned)
 				if err == nil && ok {
 					q.writeQueueMessage(conn, &writeMu, "match_assigned", payload)
@@ -239,7 +239,7 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 			}
 			q.clearSupersededAssignment(context.Background(), assigned)
 		case matchlaunch.AssignmentPending:
-			if mode == contracts.ModeDuel {
+			if contracts.IsPrivatePartyMode(mode) {
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "ACTIVE_MATCH_CONFLICT", "message": "Finish or resume your current duel before queueing again."})
 				return
 			}
@@ -273,9 +273,11 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 			AvatarURL:         profile.AvatarURL,
 			MMR:               profile.MMR,
 			RatingRD:          profile.RatingRD,
+			SeasonID:          profile.SeasonID,
 			RankedGamesPlayed: profile.RankedGamesPlayed,
 			IsGuest:           profile.IsGuest,
 			IsAdmin:           profile.IsAdmin,
+			SelectedBadge:     profile.SelectedBadge,
 		})
 		if err != nil {
 			http.Error(w, "queue unavailable", http.StatusBadGateway)

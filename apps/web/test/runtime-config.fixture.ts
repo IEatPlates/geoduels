@@ -9,8 +9,6 @@ export function createRuntimeConfigFixture(overrides: Partial<RuntimeConfig> = {
     googleAllowedOrigins: [],
     discordClientId: '',
     googleEmbedKey: 'NO_KEY_DEFINED',
-    adsenseClientId: '',
-    adsensePlaySlot: '',
     appVersion: 'dev',
     roundDurationMs: 45_000,
     maxHP: 6_000,

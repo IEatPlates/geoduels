@@ -89,20 +89,37 @@ func TestChooseProviderIdentityUserDoesNotUseEmailForDiscord(t *testing.T) {
 	}
 }
 
-func TestProviderUsesAccountEmailOnlyForGoogle(t *testing.T) {
+func TestProviderUsesAccountEmailForVerifiedOAuthProviders(t *testing.T) {
 	if !providerUsesAccountEmail(IdentityProviderGoogle) {
 		t.Fatalf("expected Google to use the canonical users.email column")
 	}
-	if providerUsesAccountEmail(IdentityProviderDiscord) {
-		t.Fatalf("expected Discord email to stay on user_identities only")
+	if !providerUsesAccountEmail(IdentityProviderDiscord) {
+		t.Fatalf("expected Discord to use the canonical users.email column when Discord verifies the email")
 	}
 }
 
-func TestProviderAccountEmailSkipsDiscord(t *testing.T) {
-	if got := providerAccountEmail(IdentityProviderDiscord, "same@example.com"); got != nil {
-		t.Fatalf("discord account email = %v, want nil", got)
+func TestProviderAccountEmailUsesVerifiedProviderEmail(t *testing.T) {
+	if got := providerAccountEmail(IdentityProviderDiscord, " same@example.com "); got != "same@example.com" {
+		t.Fatalf("discord account email = %v, want trimmed email", got)
 	}
 	if got := providerAccountEmail(IdentityProviderGoogle, " same@example.com "); got != "same@example.com" {
 		t.Fatalf("google account email = %v, want trimmed email", got)
+	}
+}
+
+func TestProviderAccountEmailSkipsSyntheticOAuthEmail(t *testing.T) {
+	tests := []struct {
+		name  string
+		email string
+	}{
+		{name: "generic fallback", email: "provider-sub@oauth.invalid"},
+		{name: "provider scoped fallback", email: "412187004407775242@discord.oauth.invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := providerAccountEmail(IdentityProviderDiscord, tt.email); got != nil {
+				t.Fatalf("discord account email = %v, want nil", got)
+			}
+		})
 	}
 }

@@ -111,20 +111,6 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		payload["error"] = "discord exchange failed"
 		return
 	}
-	identityExists, err := a.store.ProviderIdentityExists(persistence.IdentityProviderDiscord, profile.ID)
-	if err != nil {
-		payload["error"] = "identity lookup failed"
-		return
-	}
-	if !identityExists && state.LinkSub == "" {
-		if banned, err := a.store.IsSignupIPBanned(a.clientIP(r)); err != nil {
-			payload["error"] = "signup unavailable"
-			return
-		} else if banned {
-			payload["error"] = "signup unavailable"
-			return
-		}
-	}
 	displayName := strings.TrimSpace(profile.GlobalName)
 	if displayName == "" {
 		displayName = strings.TrimSpace(profile.Username)
@@ -136,17 +122,18 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if email == "" || !profile.Verified {
 		email = profile.ID + "@discord.oauth.invalid"
 	}
-	identity, err := a.store.UpsertProviderIdentity(
+	identity, err := a.resolveOAuthIdentity(
+		r,
+		state,
 		persistence.IdentityProviderDiscord,
 		profile.ID,
 		email,
 		displayName,
 		discordAvatarURL(profile),
-		state.LinkSub,
 	)
 	if err != nil {
 		log.Printf("discord oauth callback: persist identity failed: %v", err)
-		payload["error"] = "persist identity failed"
+		payload["error"] = oauthUserError(err)
 		return
 	}
 	refreshToken, sessionRecord, err := a.createSession(identity.Sub, r)
@@ -162,25 +149,7 @@ func (a *api) discordOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setRefreshCookie(w, r, refreshToken)
-	payload = map[string]any{
-		"ok":                    true,
-		"provider":              "discord",
-		"accessToken":           accessToken,
-		"onboardingRequired":    !identity.Onboarded,
-		"suggestedNickname":     defaultStr(identity.ProviderName, displayName),
-		"linkedProviders":       identity.LinkedProviders,
-		"authMigrationRequired": identity.AuthMigrationRequired,
-		"recoveryAvailable":     identity.RecoveryAvailable,
-		"canPlay":               identity.Onboarded && !identity.AuthMigrationRequired,
-		"returnTo":              state.ReturnTo,
-		"user": map[string]any{
-			"id":           identity.Sub,
-			"display_name": defaultStr(identity.DisplayName, displayName),
-			"avatar_url":   identity.AvatarURL,
-			"email":        identity.Email,
-			"isGuest":      identity.AccountType == "guest",
-		},
-	}
+	payload = a.oauthSessionPayload("discord", accessToken, identity, displayName, state.ReturnTo)
 }
 
 func (a *api) discordOAuthEnabled() bool {

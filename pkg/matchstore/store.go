@@ -132,16 +132,19 @@ const (
 )
 
 type ticket struct {
-	ID                string                `json:"id"`
-	UserID            string                `json:"userId"`
-	DisplayName       string                `json:"displayName"`
-	AvatarURL         string                `json:"avatarUrl,omitempty"`
-	MMR               int                   `json:"mmr"`
-	RatingRD          float64               `json:"ratingRd,omitempty"`
-	RankedGamesPlayed int                   `json:"rankedGamesPlayed,omitempty"`
-	IsGuest           bool                  `json:"isGuest,omitempty"`
-	Ruleset           contracts.GameRuleset `json:"ruleset,omitempty"`
-	JoinedAtUnixMS    int64                 `json:"joinedAtUnixMs"`
+	ID                string                 `json:"id"`
+	UserID            string                 `json:"userId"`
+	DisplayName       string                 `json:"displayName"`
+	AvatarURL         string                 `json:"avatarUrl,omitempty"`
+	MMR               int                    `json:"mmr"`
+	RatingRD          float64                `json:"ratingRd,omitempty"`
+	SeasonID          string                 `json:"seasonId,omitempty"`
+	RankedGamesPlayed int                    `json:"rankedGamesPlayed,omitempty"`
+	IsGuest           bool                   `json:"isGuest,omitempty"`
+	IsAdmin           bool                   `json:"isAdmin,omitempty"`
+	SelectedBadge     *contracts.PlayerBadge `json:"selectedBadge,omitempty"`
+	Ruleset           contracts.GameRuleset  `json:"ruleset,omitempty"`
+	JoinedAtUnixMS    int64                  `json:"joinedAtUnixMs"`
 }
 
 type Store interface {
@@ -285,8 +288,11 @@ func (r *redisStore) Join(pool QueuePool, ruleset contracts.GameRuleset, req con
 		AvatarURL:         req.AvatarURL,
 		MMR:               req.MMR,
 		RatingRD:          req.RatingRD,
+		SeasonID:          req.SeasonID,
 		RankedGamesPlayed: req.RankedGamesPlayed,
 		IsGuest:           req.IsGuest,
+		IsAdmin:           req.IsAdmin,
+		SelectedBadge:     req.SelectedBadge,
 		Ruleset:           ruleset,
 		JoinedAtUnixMS:    time.Now().UnixMilli(),
 	}
@@ -522,9 +528,14 @@ func ticketID(userID string) string {
 
 func matchFromTickets(opponent, self ticket) contracts.MatchFound {
 	ruleset := contracts.NormalizeRuleset(self.Ruleset)
+	seasonID := self.SeasonID
+	if seasonID == "" {
+		seasonID = opponent.SeasonID
+	}
 	return contracts.MatchFound{
-		MatchID: "m-" + intStr(time.Now().UnixMilli()),
-		Mode:    contracts.ModeDuel,
+		MatchID:  "m-" + intStr(time.Now().UnixMilli()),
+		Mode:     contracts.ModeDuel,
+		SeasonID: seasonID,
 		Config: contracts.NormalizeMatchConfig(contracts.MatchConfig{
 			Ruleset: ruleset,
 			MapKey:  contracts.MapKeyForRuleset(ruleset),
@@ -547,6 +558,8 @@ func profileFromTicket(t ticket) contracts.PlayerProfile {
 		RankedGamesPlayed: t.RankedGamesPlayed,
 		AvatarURL:         t.AvatarURL,
 		IsGuest:           t.IsGuest,
+		IsAdmin:           t.IsAdmin,
+		SelectedBadge:     t.SelectedBadge,
 	}
 }
 

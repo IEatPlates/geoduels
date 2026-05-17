@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
-import AvatarBadge from "./AvatarBadge";
-import PlayerNameWithBadge from "./PlayerNameWithBadge";
+import { PlayerIdentityCard, type ParticipantIdentityView } from "./PlayerIdentity";
 
 type PlayerCardProps = {
   side: "left" | "right";
@@ -21,6 +20,15 @@ function PlayerCard({
   isAdmin = false,
   opponent,
 }: PlayerCardProps) {
+  const participant: ParticipantIdentityView = {
+    kind: "player",
+    id: name,
+    name,
+    avatarUrl,
+    avatarFallback: fallback,
+    isAdmin,
+    rating: elo,
+  };
   return (
     <motion.div
       initial={{ opacity: 0, x: side === "left" ? -20 : 20 }}
@@ -28,25 +36,7 @@ function PlayerCard({
       transition={{ type: "spring", stiffness: 300, damping: 25, delay: 0.1 }}
       className={`w-full rounded-[24px] border border-white/10 bg-white/5 p-6 text-center shadow-2xl backdrop-blur-md md:w-72 ${side === "right" ? "md:text-right" : "md:text-left"}`}
     >
-      <div
-        className={`mb-4 flex ${side === "right" ? "justify-end" : "justify-start"} justify-center`}
-      >
-        <AvatarBadge
-          avatarUrl={avatarUrl}
-          fallback={fallback}
-          alt={name}
-          opponent={opponent}
-          size="xl"
-        />
-      </div>
-      <PlayerNameWithBadge
-        name={name}
-        isAdmin={isAdmin}
-        nameClassName="truncate text-xl font-bold text-white"
-      />
-      <p className="mt-1 text-sm font-bold uppercase tracking-[0.16em] text-[#8cb0a1]">
-        Elo {elo}
-      </p>
+      <PlayerIdentityCard participant={participant} opponent={opponent} />
     </motion.div>
   );
 }

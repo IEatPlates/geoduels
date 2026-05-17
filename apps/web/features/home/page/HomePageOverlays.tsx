@@ -17,7 +17,6 @@ type HomePageOverlaysProps = {
     | "reportPlayer"
     | "startSingleplayer"
     | "dismissNotification"
-    | "triggerGoogleRecovery"
   >;
 };
 
@@ -34,11 +33,8 @@ export default function HomePageOverlays({
         nicknameInput={auth.nicknameInput}
         nicknameError={auth.nicknameError}
         nicknameSaving={auth.nicknameSaving}
-        canRecoverGoogle={(auth.linkedProviders || []).includes("discord")}
-        recoverySaving={auth.authLoading}
         onChangeNickname={actions.setNicknameInput}
         onSubmit={() => void actions.submitOnboardingNickname()}
-        onRecoverGoogle={() => void actions.triggerGoogleRecovery()}
       />
       {activeNotification?.type === "mmr_refund" ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
@@ -88,13 +84,20 @@ export default function HomePageOverlays({
           oppAvatarUrl={overlays.endMatch.oppAvatarUrl}
           selfFallback={overlays.endMatch.selfFallback}
           oppFallback={overlays.endMatch.oppFallback}
+          selfAvatarColor={overlays.endMatch.selfAvatarColor}
+          oppAvatarColor={overlays.endMatch.oppAvatarColor}
           selfIsAdmin={overlays.endMatch.selfIsAdmin}
           opponentIsAdmin={overlays.endMatch.opponentIsAdmin}
+          selfSelectedBadge={overlays.endMatch.selfSelectedBadge}
+          opponentSelectedBadge={overlays.endMatch.opponentSelectedBadge}
           totalScore={overlays.endMatch.totalScore}
           roundResults={overlays.endMatch.roundResults}
           resultPlayerNames={overlays.endMatch.resultPlayerNames}
           resultPlayerAvatars={overlays.endMatch.resultPlayerAvatars}
           resultPlayerFallbacks={overlays.endMatch.resultPlayerFallbacks}
+          participantsById={overlays.endMatch.participantsById}
+          selfParticipant={overlays.endMatch.selfParticipant}
+          opponentParticipant={overlays.endMatch.opponentParticipant}
           onReportPlayer={actions.reportPlayer}
           onPlayAgain={
             overlays.endMatch.mode === "singleplayer"

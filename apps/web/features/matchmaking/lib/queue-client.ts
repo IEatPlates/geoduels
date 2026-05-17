@@ -7,8 +7,9 @@ export type GameRuleset = 'moving' | 'nmpz';
 export type MatchConfig = {
   ruleset?: GameRuleset;
   mapKey?: string;
-  roundTimerMode?: 'pressure' | 'fixed';
+  roundTimerMode?: 'none' | 'pressure' | 'fixed';
   roundTimeLimitMs?: number;
+  pressureTimeLimitMs?: number;
 };
 
 export type QueueEvent =

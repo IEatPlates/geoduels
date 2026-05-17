@@ -17,13 +17,13 @@ const sections = [
       "Gameplay information. We store match IDs, players in a match, guesses, coordinates, round timing, scores, HP, match snapshots, match results, reconnect/session state, lobby data, invite codes, and match history.",
       "Moderation and safety information. We store reports, report categories and reasons, reporter and reported player IDs, moderation cases, evidence, moderator notes, actions, bans, report reputation signals, and related audit history.",
       "Technical information. We may collect logs, diagnostic data, request metadata, error information, service health data, and timing information needed to operate, secure, debug, and improve GeoDuels.",
-      "Advertising and analytics information. GeoDuels may show ads and may process basic analytics about matches, rankings, service usage, and timing to understand gameplay and operate the service.",
+      "Analytics information. GeoDuels may process basic analytics about matches, rankings, service usage, and timing to understand gameplay and operate the service.",
     ],
   },
   {
     title: "3. How We Use Information",
     body: [
-      "We use information to provide accounts, authentication, matchmaking, lobbies, real-time gameplay, reconnects, rankings, leaderboards, match history, moderation, abuse prevention, service reliability, debugging, analytics, and advertising support.",
+      "We use information to provide accounts, authentication, matchmaking, lobbies, real-time gameplay, reconnects, rankings, leaderboards, match history, moderation, abuse prevention, service reliability, debugging, and analytics.",
       "We also use information to enforce the Terms of Service, investigate cheating or abuse, protect ranked integrity, issue rating adjustments or refunds, respond to requests, and maintain the security of GeoDuels.",
     ],
   },
@@ -31,13 +31,13 @@ const sections = [
     title: "4. Cookies and Similar Technologies",
     body: [
       "GeoDuels uses cookies and similar browser technologies for authentication, session management, security, and service operation. The main session cookie is designed to be protected from app JavaScript where supported by the browser.",
-      "Third-party services, including advertising providers, may use cookies or similar technologies according to their own policies.",
+      "Third-party services may use cookies or similar technologies according to their own policies.",
     ],
   },
   {
     title: "5. Third-Party Services",
     body: [
-      "GeoDuels uses Discord for sign-in and Google Maps/Street View-related gameplay. During migration, Google OAuth may be used to connect older accounts. If advertising is enabled, GeoDuels may use Google AdSense or related advertising services.",
+      "GeoDuels uses Discord for sign-in and Google Maps/Street View-related gameplay. During migration, Google OAuth may be used to connect older accounts.",
       "GeoDuels may use infrastructure providers for hosting, databases, caching, networking, logs, and service operations. Moderation alerts may be sent to configured Discord webhooks or similar notification tools.",
       "Third-party services process information under their own terms and privacy policies. GeoDuels is not responsible for third-party privacy practices.",
     ],

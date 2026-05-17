@@ -4,14 +4,17 @@ import { RESULT_ANIMATION_CONFIG } from "../../../components/ui/round-result-ani
 import { getRuntimeConfig } from "../../../lib/runtime-config";
 import {
   requestCompleteOnboarding,
+  requestDeleteAccount,
   requestDiscordStart,
-  requestGoogleRecoveryStart,
+  requestGoogleStart,
   requestGuestSession,
   requestLogout,
   requestMatchReport,
+  requestUnlinkAuthProvider,
   requestUserNotifications,
   requestSession,
   requestRefreshSession,
+  requestUpdateSelectedBadge,
   requestUpdateNickname,
   markUserNotificationRead,
   type UserNotification,
@@ -26,7 +29,11 @@ import {
   startLobby,
   streamLobby,
   transferLobbyOwner as requestTransferLobbyOwner,
+  updateLobbyTeam as requestUpdateLobbyTeam,
   updateLobbySettings as requestUpdateLobbySettings,
+  applyLobbyPatch,
+  type LobbyTeamId,
+  type PartyMode,
   type LobbySnapshot,
 } from "../../lobby/lib/lobby-client";
 import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
@@ -80,6 +87,22 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function mergeLobbySnapshotPreservingPresence(
+  current: LobbySnapshot | null,
+  next: LobbySnapshot,
+): LobbySnapshot {
+  if (!current || current.id !== next.id) return next;
+  const currentMembers = new Map(current.members.map((member) => [member.userId, member]));
+  return {
+    ...next,
+    members: next.members.map((member) => {
+      const existing = currentMembers.get(member.userId);
+      if (!existing || typeof member.connected === "boolean") return member;
+      return { ...member, connected: existing.connected };
+    }),
+  };
+}
+
 function buildSessionFromAuthResponse(
   data: AuthResponse,
   fallback: { userId: string; nicknameInput: string },
@@ -110,7 +133,7 @@ export function useHomeModel(options?: {
 }): HomeModel {
   const config = getRuntimeConfig();
   const runtimeRef = useRef(getHomeRuntime(config));
-  const { sessionController, matchController, gameController } =
+  const { sessionController, matchController, gameController, sfxController } =
     runtimeRef.current;
   const [homeResumeMatchId, setHomeResumeMatchId] = useState("");
   const routeMatchId = options?.routeMatchId ?? null;
@@ -176,14 +199,23 @@ export function useHomeModel(options?: {
       nickname: string;
     }) => requestUpdateNickname(config, accessToken, nickname),
   });
-  const googleRecoveryStartMutation = useMutation({
+  const updateSelectedBadgeMutation = useMutation({
+    mutationFn: ({
+      accessToken,
+      badgeId,
+    }: {
+      accessToken: string;
+      badgeId: string;
+    }) => requestUpdateSelectedBadge(config, accessToken, badgeId),
+  });
+  const googleStartMutation = useMutation({
     mutationFn: ({
       accessToken,
       returnTo,
     }: {
       accessToken?: string;
       returnTo?: string;
-    }) => requestGoogleRecoveryStart(config, accessToken, returnTo),
+    }) => requestGoogleStart(config, accessToken, returnTo),
   });
   const discordStartMutation = useMutation({
     mutationFn: ({
@@ -193,6 +225,19 @@ export function useHomeModel(options?: {
       accessToken?: string;
       returnTo?: string;
     }) => requestDiscordStart(config, accessToken, returnTo),
+  });
+  const unlinkAuthProviderMutation = useMutation({
+    mutationFn: ({
+      accessToken,
+      provider,
+    }: {
+      accessToken: string;
+      provider: "google" | "discord";
+    }) => requestUnlinkAuthProvider(config, accessToken, provider),
+  });
+  const deleteAccountMutation = useMutation({
+    mutationFn: ({ accessToken }: { accessToken: string }) =>
+      requestDeleteAccount(config, accessToken),
   });
 
   async function bootstrapSession() {
@@ -539,6 +584,22 @@ export function useHomeModel(options?: {
           }
           return;
         }
+        if (event.type === "lobby_patch") {
+          setPrivateLobby((current) => {
+            const next = applyLobbyPatch(current, event.patch);
+            const activeLobbyMatchId =
+              next?.activeMatchId || next?.startedMatchId || "";
+            if (
+              next &&
+              (next.state === "in_match" || next.state === "started") &&
+              activeLobbyMatchId
+            ) {
+              void handleStarted(activeLobbyMatchId);
+            }
+            return next;
+          });
+          return;
+        }
         if (event.type === "match_assigned") {
           if (handledLobbyMatchRef.current === event.assignment.matchId) {
             return;
@@ -753,16 +814,27 @@ export function useHomeModel(options?: {
         nickname: nick,
       });
       const nextSession: AuthSessionSnapshot = {
-        userId: current.userId,
+        userId: typeof data.user?.id === "string" && data.user.id ? data.user.id : current.userId,
         accessToken: data.accessToken || current.accessToken,
         onboardingRequired: false,
+        authMigrationRequired: !!data.authMigrationRequired,
+        recoveryAvailable: !!data.recoveryAvailable,
+        linkedProviders: Array.isArray(data.linkedProviders)
+          ? data.linkedProviders.filter((provider: unknown): provider is string => typeof provider === "string")
+          : current.linkedProviders || [],
+        canPlay: typeof data.canPlay === "boolean" ? data.canPlay : true,
         nicknameInput: nick,
       };
       sessionController.applySessionSnapshot(nextSession, {
         nicknameSaving: false,
         nicknameError: "",
         leaderboard: current.leaderboard,
-        displayName: nick,
+        displayName: typeof data.user?.display_name === "string" && data.user.display_name ? data.user.display_name : nick,
+        userEmail: typeof data.user?.email === "string" ? data.user.email : current.userEmail,
+        userAvatar: typeof data.user?.avatar_url === "string" ? data.user.avatar_url : current.userAvatar,
+        isGuest: typeof data.user?.isGuest === "boolean" ? data.user.isGuest : current.isGuest,
+        isAdmin: typeof data.user?.isAdmin === "boolean" ? data.user.isAdmin : current.isAdmin,
+        isModerator: typeof data.user?.isModerator === "boolean" ? data.user.isModerator : current.isModerator,
       });
     } catch (error) {
       sessionController.setAuthPending({
@@ -858,11 +930,38 @@ export function useHomeModel(options?: {
     sessionController.clearAuthSession();
   };
 
-  const triggerGoogleRecovery = async () => {
+  const deleteAccount = async () => {
+    const current = sessionController.getState();
+    if (!current.accessToken) {
+      sessionController.setAuthPending({
+        authError: "Please sign in again.",
+      });
+      return;
+    }
+    sessionController.setAuthPending({ authLoading: true, authError: "" });
+    try {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowOnboarding: true,
+      });
+      if (!session?.accessToken) {
+        throw new Error("Please sign in again.");
+      }
+      await deleteAccountMutation.mutateAsync({ accessToken: session.accessToken });
+      sessionController.clearAuthSession();
+    } catch (error) {
+      sessionController.setAuthPending({
+        authLoading: false,
+        authError: getErrorMessage(error, "Failed to delete account"),
+      });
+      throw error;
+    }
+  };
+
+  const triggerGoogleSignIn = async () => {
     if (typeof window === "undefined") return;
     if (
       !config.googleClientId ||
-      !sessionController.getState().googleRecoveryEnabled
+      !sessionController.getState().googleSignInEnabled
     ) {
       return;
     }
@@ -871,7 +970,7 @@ export function useHomeModel(options?: {
       const session = await sessionController.ensureFreshSession(60_000, {
         allowOnboarding: true,
       });
-      const data = await googleRecoveryStartMutation.mutateAsync({
+      const data = await googleStartMutation.mutateAsync({
         accessToken: session?.accessToken,
         returnTo: currentReturnTo(),
       });
@@ -882,7 +981,7 @@ export function useHomeModel(options?: {
     } catch (error) {
       sessionController.setAuthPending({
         authLoading: false,
-        authError: getErrorMessage(error, "Failed to start Google account recovery"),
+        authError: getErrorMessage(error, "Failed to start Google sign-in"),
       });
     }
   };
@@ -913,6 +1012,59 @@ export function useHomeModel(options?: {
     }
   };
 
+  const unlinkAuthProvider = async (provider: "google" | "discord") => {
+    const current = sessionController.getState();
+    if (!current.accessToken) {
+      sessionController.setAuthPending({
+        authError: "Please sign in again.",
+      });
+      return;
+    }
+    sessionController.setAuthPending({ authLoading: true, authError: "" });
+    try {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowOnboarding: true,
+      });
+      if (!session?.accessToken) {
+        throw new Error("Please sign in again.");
+      }
+      const data = await unlinkAuthProviderMutation.mutateAsync({
+        accessToken: session.accessToken,
+        provider,
+      });
+      const latest = sessionController.getState();
+      const nextSession = buildSessionFromAuthResponse(data, {
+        userId: latest.userId,
+        nicknameInput: latest.nicknameInput,
+      });
+      sessionController.applySessionSnapshot(nextSession, {
+        userEmail:
+          typeof data.user?.email === "string" ? data.user.email : latest.userEmail,
+        displayName:
+          typeof data.user?.display_name === "string" && data.user.display_name
+            ? data.user.display_name
+            : latest.displayName,
+        userAvatar:
+          typeof data.user?.avatar_url === "string" ? data.user.avatar_url : latest.userAvatar,
+        isGuest:
+          typeof data.user?.isGuest === "boolean" ? data.user.isGuest : latest.isGuest,
+        isAdmin:
+          typeof data.user?.isAdmin === "boolean" ? data.user.isAdmin : latest.isAdmin,
+        isModerator:
+          typeof data.user?.isModerator === "boolean"
+            ? data.user.isModerator
+            : latest.isModerator,
+        authLoading: false,
+        authError: "",
+      });
+    } catch (error) {
+      sessionController.setAuthPending({
+        authLoading: false,
+        authError: getErrorMessage(error, "Failed to unlink sign-in method"),
+      });
+    }
+  };
+
   const playableSessionForLobby = async () => {
     const session = await sessionController.getPlayableSession();
     if (!session) {
@@ -922,13 +1074,13 @@ export function useHomeModel(options?: {
     return session;
   };
 
-  const createInviteLobby = async () => {
+  const createInviteLobby = async (mode: PartyMode = "duel") => {
     setLobbyBusy(true);
     setLobbyError("");
     try {
       const session = await playableSessionForLobby();
       if (!session) return;
-      const snap = await createLobby(config, session.accessToken);
+      const snap = await createLobby(config, session.accessToken, mode);
       handledLobbyMatchRef.current = "";
       setPendingLobbyCode(snap.inviteCode);
       setPrivateLobby(snap);
@@ -998,14 +1150,13 @@ export function useHomeModel(options?: {
     setLobbyBusy(true);
     setLobbyError("");
     try {
-      setPrivateLobby(
-        await requestKickLobbyMember(
+      const next = await requestKickLobbyMember(
           config,
           privateLobby.id,
           auth.accessToken,
           userId,
-        ),
-      );
+        );
+      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
     } catch (error) {
       setLobbyError(getErrorMessage(error, "Could not kick player"));
     } finally {
@@ -1018,14 +1169,13 @@ export function useHomeModel(options?: {
     setLobbyBusy(true);
     setLobbyError("");
     try {
-      setPrivateLobby(
-        await requestTransferLobbyOwner(
+      const next = await requestTransferLobbyOwner(
           config,
           privateLobby.id,
           auth.accessToken,
           userId,
-        ),
-      );
+        );
+      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
     } catch (error) {
       setLobbyError(getErrorMessage(error, "Could not transfer leader"));
     } finally {
@@ -1054,21 +1204,40 @@ export function useHomeModel(options?: {
     }
   };
 
-  const updatePrivateLobbySettings = async (matchConfig: MatchConfig) => {
+  const updatePrivateLobbySettings = async (matchConfig: MatchConfig, mode?: PartyMode) => {
     if (!privateLobby?.id || !auth.accessToken) return;
     setLobbyBusy(true);
     setLobbyError("");
     try {
-      setPrivateLobby(
-        await requestUpdateLobbySettings(
+      const next = await requestUpdateLobbySettings(
           config,
           privateLobby.id,
           auth.accessToken,
           matchConfig,
-        ),
-      );
+          mode,
+        );
+      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
     } catch (error) {
       setLobbyError(getErrorMessage(error, "Could not update lobby settings"));
+    } finally {
+      setLobbyBusy(false);
+    }
+  };
+
+  const switchPrivateLobbyTeam = async (teamId: LobbyTeamId) => {
+    if (!privateLobby?.id || !auth.accessToken) return;
+    setLobbyBusy(true);
+    setLobbyError("");
+    try {
+      const next = await requestUpdateLobbyTeam(
+          config,
+          privateLobby.id,
+          auth.accessToken,
+          teamId,
+        );
+      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
+    } catch (error) {
+      setLobbyError(getErrorMessage(error, "Could not switch team"));
     } finally {
       setLobbyBusy(false);
     }
@@ -1094,6 +1263,22 @@ export function useHomeModel(options?: {
     );
   };
 
+  const selectBadge = async (badgeId: string) => {
+    const session = await sessionController.ensureFreshSession(60_000);
+    if (!session?.accessToken) {
+      sessionController.setAuthPending({ authError: "Please sign in again." });
+      return;
+    }
+    const payload = await updateSelectedBadgeMutation.mutateAsync({
+      accessToken: session.accessToken,
+      badgeId,
+    });
+    sessionController.applyBadgeSelection(payload);
+    if (badgeId) {
+      sfxController.play("select");
+    }
+  };
+
   const dismissNotification = async (notificationId: number) => {
     setNotifications((current) =>
       current.filter((notification) => notification.id !== notificationId),
@@ -1115,6 +1300,7 @@ export function useHomeModel(options?: {
       transferLobbyOwner,
       startPrivateLobby,
       updatePrivateLobbySettings,
+      switchPrivateLobbyTeam,
       placeGuess: gameController.placeGuess,
       finalizeGuess: gameController.finalizeGuess,
       advanceRound: gameController.advanceRound,
@@ -1124,12 +1310,15 @@ export function useHomeModel(options?: {
       sendChatEmote: matchController.sendChatEmote,
       reportPlayer,
       devLogin,
-      triggerGoogleRecovery,
+      triggerGoogleSignIn,
       triggerDiscordSignIn,
+      unlinkAuthProvider,
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,
+      deleteAccount,
       submitOnboardingNickname,
       submitProfileNickname,
+      selectBadge,
       setNicknameInput: sessionController.setNicknameInputAndClearError,
       dismissNotification,
     },

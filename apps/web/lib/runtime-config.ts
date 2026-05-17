@@ -12,8 +12,6 @@ export type WindowRuntimeConfig = {
   NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: string;
   NEXT_PUBLIC_DISCORD_CLIENT_ID: string;
   NEXT_PUBLIC_GOOGLE_EMBED_KEY: string;
-  NEXT_PUBLIC_ADSENSE_CLIENT_ID: string;
-  NEXT_PUBLIC_ADSENSE_PLAY_SLOT: string;
   NEXT_PUBLIC_APP_VERSION: string;
 };
 
@@ -25,8 +23,6 @@ export type RuntimeConfig = {
   googleAllowedOrigins: string[];
   discordClientId: string;
   googleEmbedKey: string;
-  adsenseClientId: string;
-  adsensePlaySlot: string;
   appVersion: string;
   roundDurationMs: number;
   maxHP: number;
@@ -65,8 +61,6 @@ export function createRuntimeConfig(source?: Partial<WindowRuntimeConfig>): Runt
     NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS: process.env.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS || '',
     NEXT_PUBLIC_DISCORD_CLIENT_ID: process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || '',
     NEXT_PUBLIC_GOOGLE_EMBED_KEY: process.env.NEXT_PUBLIC_GOOGLE_EMBED_KEY || 'NO_KEY_DEFINED',
-    NEXT_PUBLIC_ADSENSE_CLIENT_ID: process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID || '',
-    NEXT_PUBLIC_ADSENSE_PLAY_SLOT: process.env.NEXT_PUBLIC_ADSENSE_PLAY_SLOT || '',
     NEXT_PUBLIC_APP_VERSION:
       process.env.NEXT_PUBLIC_APP_VERSION || (process.env.NEXT_PUBLIC_GIT_SHA || 'dev').slice(0, 12)
   };
@@ -82,8 +76,6 @@ export function createRuntimeConfig(source?: Partial<WindowRuntimeConfig>): Runt
     googleAllowedOrigins: splitOrigins(publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_ALLOWED_ORIGINS),
     discordClientId: publicRuntimeConfig.NEXT_PUBLIC_DISCORD_CLIENT_ID,
     googleEmbedKey: publicRuntimeConfig.NEXT_PUBLIC_GOOGLE_EMBED_KEY,
-    adsenseClientId: publicRuntimeConfig.NEXT_PUBLIC_ADSENSE_CLIENT_ID,
-    adsensePlaySlot: publicRuntimeConfig.NEXT_PUBLIC_ADSENSE_PLAY_SLOT,
     appVersion: publicRuntimeConfig.NEXT_PUBLIC_APP_VERSION,
     roundDurationMs: 45_000,
     maxHP: 6_000,

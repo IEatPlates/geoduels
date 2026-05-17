@@ -200,6 +200,12 @@ img {
   overflow: hidden;
 }
 
+.minimap-result.leaflet-container,
+.minimap-result .leaflet-pane,
+.minimap-result .leaflet-map-pane {
+  background: #000 !important;
+}
+
 .minimap-interactive,
 .minimap-interactive.leaflet-grab,
 .minimap-interactive .leaflet-grab .leaflet-interactive,

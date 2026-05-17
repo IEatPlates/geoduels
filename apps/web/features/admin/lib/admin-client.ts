@@ -295,6 +295,17 @@ export type AdminModerationSettings = {
   discordWebhookUrl: string;
 };
 
+export type AdminRankedSeasonSettings = {
+  activeSeasonId: string;
+};
+
+export type AdminRankedSeasonRolloverResult = {
+  previousSeasonId: string;
+  activeSeasonId: string;
+  badgesAwarded: number;
+  playersSeeded: number;
+};
+
 export async function requestAdminModerationSettings(
   config: RuntimeConfig,
   accessToken: string,
@@ -329,6 +340,38 @@ export async function requestAdminPutModerationSettings(
     );
   }
   return resp.json() as Promise<AdminModerationSettings>;
+}
+
+export async function requestAdminRankedSeason(
+  config: RuntimeConfig,
+  accessToken: string,
+) {
+  const resp = await fetch(`${config.apiURL}/v1/admin/seasons`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to load season settings"));
+  }
+  return resp.json() as Promise<AdminRankedSeasonSettings>;
+}
+
+export async function requestAdminRolloverRankedSeason(
+  config: RuntimeConfig,
+  accessToken: string,
+  nextSeasonId: string,
+) {
+  const resp = await fetch(`${config.apiURL}/v1/admin/seasons/rollover`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ nextSeasonId }),
+  });
+  if (!resp.ok) {
+    throw new Error(await readError(resp, "Failed to roll over season"));
+  }
+  return resp.json() as Promise<AdminRankedSeasonRolloverResult>;
 }
 
 export async function requestAdminPutMaintenance(

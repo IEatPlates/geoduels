@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { WifiOff } from "lucide-react";
 import PlayerNameWithBadge from "./PlayerNameWithBadge";
+import type { PlayerBadgeInfo } from "./PlayerBadge";
+import { PlayerAvatar, type ParticipantIdentityView } from "./PlayerIdentity";
 
 type Props = {
   side: "left" | "right";
@@ -10,9 +12,12 @@ type Props = {
   hpPct: string;
   avatarUrl?: string;
   fallback: string;
+  avatarColor?: string;
   isAdmin?: boolean;
+  selectedBadge?: PlayerBadgeInfo | null;
   opponent?: boolean;
   disconnected?: boolean;
+  hideElo?: boolean;
 };
 
 export default function PlayerHPCard({
@@ -23,22 +28,40 @@ export default function PlayerHPCard({
   hpPct,
   avatarUrl,
   fallback,
+  avatarColor,
   isAdmin = false,
+  selectedBadge,
   opponent,
   disconnected,
+  hideElo = false,
 }: Props) {
-  const [imgFailed, setImgFailed] = useState(false);
   const numericPct = parseFloat(hpPct) || 0;
-
-  useEffect(() => {
-    setImgFailed(false);
-  }, [avatarUrl]);
 
   const isLeft = side === "left";
   const skewClass = isLeft ? "-skew-x-[25deg]" : "skew-x-[25deg]";
   const reverseSkewClass = isLeft ? "skew-x-[25deg]" : "-skew-x-[25deg]";
   const fillGradientAngle = isLeft ? "90deg" : "270deg";
   const showDisconnectBadge = opponent && disconnected;
+  const participant: ParticipantIdentityView = avatarColor
+    ? {
+        kind: "team",
+        id: name,
+        name,
+        avatarFallback: fallback || name?.[0] || "?",
+        avatarColor,
+        hp,
+      }
+    : {
+        kind: "player",
+        id: name,
+        name,
+        avatarUrl,
+        avatarFallback: fallback || name?.[0] || "?",
+        isAdmin,
+        selectedBadge,
+        rating: elo,
+        disconnected,
+      };
 
   const hpFill = useMemo(
     () =>
@@ -65,20 +88,12 @@ export default function PlayerHPCard({
       >
         {/* Avatar Profile Picture */}
         <div className="relative z-10 w-[54px] h-[54px] shrink-0 drop-shadow-[0_4px_6px_rgba(0,0,0,0.6)]">
-          <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#202235] shadow-lg">
-            {avatarUrl && !imgFailed ? (
-              <img
-                src={avatarUrl}
-                alt={name}
-                className="w-full h-full object-cover"
-                onError={() => setImgFailed(true)}
-              />
-            ) : (
-              <div className="font-hud flex w-full h-full items-center justify-center text-2xl text-white uppercase bg-slate-800">
-                {fallback?.[0] || name?.[0] || "?"}
-              </div>
-            )}
-          </div>
+          <PlayerAvatar
+            participant={participant}
+            size="lg"
+            opponent={opponent}
+            className="h-full w-full border-0 shadow-lg"
+          />
         </div>
 
         {/* HP Bar Container */}
@@ -124,8 +139,12 @@ export default function PlayerHPCard({
         data-testid="player-name-row"
       >
         <span className="block max-w-full truncate px-2 text-[15px] font-bold text-white drop-shadow-[0_2px_2px_rgba(0,0,0,0.7)]">
-          <PlayerNameWithBadge name={name} isAdmin={isAdmin} />{" "}
-          <span className="text-[#9fd6bf]">({elo})</span>
+          <PlayerNameWithBadge name={name} isAdmin={isAdmin} selectedBadge={selectedBadge} />{" "}
+          {!hideElo && (
+            <span className="inline-flex items-center gap-1 text-[#9fd6bf]">
+              ({elo})
+            </span>
+          )}
         </span>
       </div>
     </div>

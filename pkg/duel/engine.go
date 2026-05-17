@@ -12,18 +12,18 @@ import (
 )
 
 const (
-	startingHP       = 6000
-	roundDuration    = 45 * time.Second
-	roundIdleCap     = 8 * time.Minute
-	roundIntro       = 3 * time.Second
-	pressureDuration = 15500 * time.Millisecond
-	resultDuration   = 6 * time.Second
-	disconnectGrace  = 30 * time.Second
-	staleGrace       = 3 * time.Minute
-	maxRounds        = 20
-	maxDistanceKm    = math.Pi * 6371.0
-	maxScore         = gameplay.MaxScore
-	perfectGuessKm   = 0.15
+	startingHP      = 6000
+	roundDuration   = 45 * time.Second
+	roundIdleCap    = 8 * time.Minute
+	roundIntro      = 3 * time.Second
+	resultDuration  = 6 * time.Second
+	disconnectGrace = 30 * time.Second
+	staleGrace      = 3 * time.Minute
+	maxRounds       = 20
+	ffaRounds       = 5
+	maxDistanceKm   = math.Pi * 6371.0
+	maxScore        = gameplay.MaxScore
+	perfectGuessKm  = 0.15
 )
 
 type Guess struct {
@@ -35,10 +35,13 @@ type Guess struct {
 
 type Match struct {
 	ID                 string
+	Mode               contracts.MatchMode
+	SeasonID           string
 	Config             contracts.MatchConfig
 	State              contracts.MatchState
 	Unranked           bool
 	Players            map[string]*contracts.PlayerState
+	Teams              map[string]*contracts.TeamState
 	CurrentLocation    contracts.LocationPoint
 	CurrentIndex       int
 	RoundStartedAt     time.Time
@@ -74,12 +77,28 @@ func (e *Engine) CreateMatch(matchID string, playerIDs []string, profiles map[st
 
 type MatchOptions struct {
 	Unranked bool
+	SeasonID string
 	Config   contracts.MatchConfig
+	Mode     contracts.MatchMode
+	Teams    map[string]string
 }
 
 func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, profiles map[string]contracts.PlayerProfile, opts MatchOptions) (*Match, error) {
-	if len(playerIDs) != 2 {
-		return nil, errors.New("duel requires exactly two players")
+	mode := opts.Mode
+	if mode == "" {
+		mode = contracts.ModeDuel
+	}
+	switch mode {
+	case contracts.ModeDuel:
+		if len(playerIDs) != 2 {
+			return nil, errors.New("duel requires exactly two players")
+		}
+	case contracts.ModeTeamDuel, contracts.ModeFreeForAll:
+		if len(playerIDs) < 2 || len(playerIDs) > 8 {
+			return nil, errors.New("party match requires 2 to 8 players")
+		}
+	default:
+		return nil, errors.New("unsupported duel mode")
 	}
 	if e.roundProvider == nil {
 		return nil, errors.New("round provider required")
@@ -101,6 +120,10 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		if name == "" {
 			name = id
 		}
+		teamID := ""
+		if mode == contracts.ModeTeamDuel {
+			teamID = normalizeTeamID(opts.Teams[id])
+		}
 		players[id] = &contracts.PlayerState{
 			UserID:            id,
 			DisplayName:       name,
@@ -110,15 +133,24 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 			AvatarURL:         p.AvatarURL,
 			IsGuest:           p.IsGuest,
 			IsAdmin:           p.IsAdmin,
+			SelectedBadge:     p.SelectedBadge,
+			TeamID:            teamID,
 			HP:                startingHP,
 		}
 	}
+	teams := buildTeams(mode, playerIDs, players)
+	if mode == contracts.ModeTeamDuel && len(teams) != 2 {
+		return nil, errors.New("team duel requires both teams")
+	}
 	m := &Match{
 		ID:              matchID,
+		Mode:            mode,
+		SeasonID:        opts.SeasonID,
 		Config:          cfg,
 		State:           contracts.MatchLive,
 		Unranked:        opts.Unranked,
 		Players:         players,
+		Teams:           teams,
 		CurrentLocation: firstRound,
 		CurrentIndex:    0,
 		RoundStartedAt:  time.Now(),
@@ -129,7 +161,7 @@ func (e *Engine) CreateMatchWithOptions(matchID string, playerIDs []string, prof
 		LastActivity:    time.Now(),
 	}
 	e.startRoundTimer(m)
-	if !m.Unranked {
+	if m.Mode == contracts.ModeDuel && !m.Unranked {
 		m.RatingPreview = ratingPreview(playerIDs, players)
 	}
 	e.matches[matchID] = m
@@ -188,9 +220,15 @@ func (e *Engine) SubmitGuess(g contracts.GuessPayload) (*contracts.MatchSnapshot
 	m.LastActivity = now
 	m.EventSeq++
 	if g.Finalize {
-		pressureDeadline := now.Add(pressureDuration)
-		if m.Config.RoundTimerMode != contracts.RoundTimerFixed && (m.RoundDeadline.IsZero() || pressureDeadline.Before(m.RoundDeadline)) {
-			m.RoundDeadline = pressureDeadline
+		pressureMS := m.Config.PressureTimeLimitMS
+		if m.Config.RoundTimerMode == contracts.RoundTimerPressure && pressureMS <= 0 {
+			pressureMS = contracts.DefaultPressureTimeMS
+		}
+		if pressureMS > 0 {
+			pressureDeadline := now.Add(time.Duration(pressureMS) * time.Millisecond)
+			if m.RoundDeadline.IsZero() || pressureDeadline.Before(m.RoundDeadline) {
+				m.RoundDeadline = pressureDeadline
+			}
 		}
 	}
 	allFinal := true
@@ -375,6 +413,48 @@ func (e *Engine) resolveRound(m *Match) {
 		}
 		p.Finalized = false
 	}
+	switch m.Mode {
+	case contracts.ModeDuel:
+		resolveDuelDamage(m, result, userIDs)
+	case contracts.ModeTeamDuel:
+		resolveTeamDuelDamage(m, result)
+	case contracts.ModeFreeForAll:
+		for userID, playerResult := range result.Players {
+			p := m.Players[userID]
+			p.TotalScore += playerResult.Score
+			playerResult.HPAfterRound = 0
+			result.Players[userID] = playerResult
+		}
+	}
+	if m.Mode != contracts.ModeFreeForAll {
+		for _, p := range m.Players {
+			if p.HP <= 0 {
+				p.HP = 0
+				m.State = contracts.MatchEnded
+			}
+		}
+	}
+	if m.Mode == contracts.ModeFreeForAll && result.RoundNumber >= ffaRounds {
+		m.State = contracts.MatchEnded
+	}
+	if result.RoundNumber >= maxRounds {
+		m.State = contracts.MatchEnded
+	}
+	m.LastRoundResult = result
+	m.RoundResults = append(m.RoundResults, result)
+	m.Guesses = map[string]Guess{}
+	m.LastActivity = time.Now()
+	m.EventSeq++
+	if m.State == contracts.MatchEnded {
+		return
+	}
+	m.PendingAdvance = true
+	m.IntermissionUntil = time.Now().Add(resultDuration)
+	m.LastActivity = time.Now()
+	m.EventSeq++
+}
+
+func resolveDuelDamage(m *Match, result *contracts.RoundResult, userIDs []string) {
 	if len(userIDs) == 2 {
 		a := result.Players[userIDs[0]]
 		b := result.Players[userIDs[1]]
@@ -403,27 +483,65 @@ func (e *Engine) resolveRound(m *Match) {
 		result.Players[userIDs[0]] = a
 		result.Players[userIDs[1]] = b
 	}
-	for _, p := range m.Players {
-		if p.HP <= 0 {
-			p.HP = 0
+}
+
+func resolveTeamDuelDamage(m *Match, result *contracts.RoundResult) {
+	if len(m.Teams) != 2 {
+		m.State = contracts.MatchEnded
+		return
+	}
+	result.Teams = map[string]contracts.RoundTeamResult{}
+	for teamID, team := range m.Teams {
+		best := contracts.RoundTeamResult{TeamID: teamID, DistanceKm: maxDistanceKm, HPAfterRound: team.HP}
+		for _, userID := range team.Players {
+			playerResult, ok := result.Players[userID]
+			if !ok {
+				continue
+			}
+			if best.RepresentativeUserID == "" || playerResult.Score > best.Score {
+				best.RepresentativeUserID = userID
+				best.Lat = playerResult.Lat
+				best.Lng = playerResult.Lng
+				best.DistanceKm = playerResult.DistanceKm
+				best.Score = playerResult.Score
+			}
+		}
+		result.Teams[teamID] = best
+	}
+	a := result.Teams["a"]
+	b := result.Teams["b"]
+	multiplier := roundDamageMultiplier(result.RoundNumber)
+	damage := int(math.Round(float64(absInt(a.Score-b.Score)) * multiplier))
+	switch {
+	case a.Score > b.Score:
+		a.DamageDealt = damage
+		b.DamageTaken = damage
+		m.Teams["b"].HP -= damage
+	case b.Score > a.Score:
+		b.DamageDealt = damage
+		a.DamageTaken = damage
+		m.Teams["a"].HP -= damage
+	}
+	for teamID, team := range m.Teams {
+		if team.HP < 0 {
+			team.HP = 0
+		}
+		for _, userID := range team.Players {
+			if p := m.Players[userID]; p != nil {
+				p.HP = team.HP
+			}
+		}
+		teamResult := result.Teams[teamID]
+		teamResult.HPAfterRound = team.HP
+		result.Teams[teamID] = teamResult
+		if team.HP <= 0 {
 			m.State = contracts.MatchEnded
 		}
 	}
-	if result.RoundNumber >= maxRounds {
-		m.State = contracts.MatchEnded
-	}
-	m.LastRoundResult = result
-	m.RoundResults = append(m.RoundResults, result)
-	m.Guesses = map[string]Guess{}
-	m.LastActivity = time.Now()
-	m.EventSeq++
-	if m.State == contracts.MatchEnded {
-		return
-	}
-	m.PendingAdvance = true
-	m.IntermissionUntil = time.Now().Add(resultDuration)
-	m.LastActivity = time.Now()
-	m.EventSeq++
+	a.HPAfterRound = m.Teams["a"].HP
+	b.HPAfterRound = m.Teams["b"].HP
+	result.Teams["a"] = a
+	result.Teams["b"] = b
 }
 
 func guessUnixMS(g Guess) int64 {
@@ -533,6 +651,19 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 	for id, p := range m.Players {
 		players[id] = *p
 	}
+	teams := map[string]contracts.TeamState{}
+	for id, team := range m.Teams {
+		teams[id] = *team
+		teams[id] = contracts.TeamState{
+			TeamID:  team.TeamID,
+			Name:    team.Name,
+			HP:      team.HP,
+			Players: append([]string(nil), team.Players...),
+		}
+	}
+	if len(teams) == 0 {
+		teams = nil
+	}
 	msLeft := int64(0)
 	if phase == contracts.PhaseRoundResult {
 		msLeft = maxInt64(0, time.Until(m.IntermissionUntil).Milliseconds())
@@ -543,7 +674,8 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 	}
 	return &contracts.MatchSnapshot{
 		MatchID:         m.ID,
-		Mode:            contracts.ModeDuel,
+		Mode:            m.Mode,
+		SeasonID:        m.SeasonID,
 		Config:          contracts.NormalizeMatchConfig(m.Config),
 		Unranked:        m.Unranked,
 		State:           m.State,
@@ -556,6 +688,7 @@ func (m *Match) snapshot() *contracts.MatchSnapshot {
 		RoundResults:    append([]*contracts.RoundResult(nil), m.RoundResults...),
 		RoundMSLeft:     msLeft,
 		Players:         players,
+		Teams:           teams,
 		RatingPreview:   copyRatingPreview(m.RatingPreview),
 		EventSequence:   m.EventSeq,
 		ServerUnixMS:    time.Now().UnixMilli(),
@@ -598,6 +731,44 @@ func copyRatingPreview(in map[string]contracts.RatingDeltaPreview) map[string]co
 		out[k] = v
 	}
 	return out
+}
+
+func buildTeams(mode contracts.MatchMode, playerIDs []string, players map[string]*contracts.PlayerState) map[string]*contracts.TeamState {
+	if mode != contracts.ModeTeamDuel {
+		return nil
+	}
+	teams := map[string]*contracts.TeamState{
+		"a": {TeamID: "a", Name: "Team Red", HP: startingHP, Players: []string{}},
+		"b": {TeamID: "b", Name: "Team Blue", HP: startingHP, Players: []string{}},
+	}
+	for index, userID := range playerIDs {
+		player := players[userID]
+		if player == nil {
+			continue
+		}
+		teamID := normalizeTeamID(player.TeamID)
+		if player.TeamID == "" {
+			if index%2 == 1 {
+				teamID = "b"
+			}
+			player.TeamID = teamID
+		}
+		teams[teamID].Players = append(teams[teamID].Players, userID)
+		player.HP = teams[teamID].HP
+	}
+	for teamID, team := range teams {
+		if len(team.Players) == 0 {
+			delete(teams, teamID)
+		}
+	}
+	return teams
+}
+
+func normalizeTeamID(teamID string) string {
+	if teamID == "b" {
+		return "b"
+	}
+	return "a"
 }
 
 func (e *Engine) roundExpired(m *Match, now time.Time) bool {

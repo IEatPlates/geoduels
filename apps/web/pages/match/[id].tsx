@@ -45,8 +45,7 @@ function buildHistoryOverlay(
     snapshot.players[userId] || snapshot.players[playerIds[0] || ""];
   const opponentId = playerIds.find((id) => id !== selfPlayer?.userId) || "";
   const opponentPlayer = opponentId ? snapshot.players[opponentId] : undefined;
-  const mode: "duel" | "singleplayer" =
-    snapshot.mode === "singleplayer" ? "singleplayer" : "duel";
+  const mode = snapshot.mode || "duel";
   const roundResults =
     snapshot.roundResults && snapshot.roundResults.length > 0
       ? snapshot.roundResults
@@ -82,22 +81,22 @@ function buildHistoryOverlay(
     mode,
     outcome,
     selfName,
-    opponentName: mode === "singleplayer" ? undefined : opponentName,
-    opponentUserId: mode === "singleplayer" ? undefined : opponentId,
-    selfElo: mode === "singleplayer" ? undefined : selfPlayer?.mmr,
-    opponentElo: mode === "singleplayer" ? undefined : opponentPlayer?.mmr,
+    opponentName: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentName,
+    opponentUserId: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentId,
+    selfElo: mode === "singleplayer" || mode === "free_for_all" ? undefined : selfPlayer?.mmr,
+    opponentElo: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentPlayer?.mmr,
     selfHP,
-    oppHP: mode === "singleplayer" ? undefined : oppHP,
+    oppHP: mode === "singleplayer" || mode === "free_for_all" ? undefined : oppHP,
     selfAvatarUrl: selfPlayer?.avatarUrl || userAvatar,
     oppAvatarUrl:
-      mode === "singleplayer" ? undefined : opponentPlayer?.avatarUrl,
+      mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentPlayer?.avatarUrl,
     selfFallback: (selfName || "Y").slice(0, 1).toUpperCase(),
     oppFallback:
-      mode === "singleplayer"
+      mode === "singleplayer" || mode === "free_for_all"
         ? undefined
         : (opponentName || "O").slice(0, 1).toUpperCase(),
     selfIsAdmin,
-    opponentIsAdmin: mode === "singleplayer" ? undefined : opponentIsAdmin,
+    opponentIsAdmin: mode === "singleplayer" || mode === "free_for_all" ? undefined : opponentIsAdmin,
     totalScore: selfPlayer?.totalScore || 0,
     roundResults,
     resultPlayerNames,
