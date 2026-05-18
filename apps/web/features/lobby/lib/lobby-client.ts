@@ -68,8 +68,12 @@ function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
+function lobbyHTTPBase(config: RuntimeConfig) {
+  return normalizeHTTPBase(config.queueURL).replace(/\/$/, "");
+}
+
 export async function createLobby(config: RuntimeConfig, accessToken: string, mode: PartyMode = "duel"): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ mode, mapScope: "world" }),
@@ -79,7 +83,7 @@ export async function createLobby(config: RuntimeConfig, accessToken: string, mo
 }
 
 export async function updateLobbySettings(config: RuntimeConfig, lobbyId: string, accessToken: string, matchConfig: MatchConfig, mode?: PartyMode): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/settings`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/settings`, {
     method: "PATCH",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ config: matchConfig, mode }),
@@ -89,7 +93,7 @@ export async function updateLobbySettings(config: RuntimeConfig, lobbyId: string
 }
 
 export async function updateLobbyTeam(config: RuntimeConfig, lobbyId: string, accessToken: string, teamId: LobbyTeamId): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/team`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/team`, {
     method: "PATCH",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ teamId }),
@@ -123,14 +127,14 @@ export function applyLobbyPatch(lobby: LobbySnapshot | null, patch: LobbyPatch):
 }
 
 export async function fetchLobby(config: RuntimeConfig, code: string): Promise<LobbySnapshot | null> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(code)}`);
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(code)}`);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error("Lobby unavailable");
   return resp.json();
 }
 
 export async function joinLobby(config: RuntimeConfig, code: string, accessToken: string): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(code)}/join`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(code)}/join`, {
     method: "POST",
     headers: authHeaders(accessToken),
   });
@@ -139,7 +143,7 @@ export async function joinLobby(config: RuntimeConfig, code: string, accessToken
 }
 
 export async function leaveLobby(config: RuntimeConfig, lobbyId: string, accessToken: string): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/leave`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/leave`, {
     method: "POST",
     headers: authHeaders(accessToken),
   });
@@ -148,7 +152,7 @@ export async function leaveLobby(config: RuntimeConfig, lobbyId: string, accessT
 }
 
 export async function kickLobbyMember(config: RuntimeConfig, lobbyId: string, accessToken: string, userId: string): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/kick`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/kick`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ userId }),
@@ -158,7 +162,7 @@ export async function kickLobbyMember(config: RuntimeConfig, lobbyId: string, ac
 }
 
 export async function transferLobbyOwner(config: RuntimeConfig, lobbyId: string, accessToken: string, userId: string): Promise<LobbySnapshot> {
-  const resp = await fetch(`${config.apiURL}/v1/lobbies/${encodeURIComponent(lobbyId)}/transfer-owner`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/transfer-owner`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify({ userId }),
@@ -168,7 +172,7 @@ export async function transferLobbyOwner(config: RuntimeConfig, lobbyId: string,
 }
 
 export async function startLobby(config: RuntimeConfig, lobbyId: string, accessToken: string): Promise<LobbyAssignment> {
-  const resp = await fetch(`${normalizeHTTPBase(config.queueURL).replace(/\/$/, "")}/lobbies/${encodeURIComponent(lobbyId)}/start`, {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/start`, {
     method: "POST",
     headers: authHeaders(accessToken),
   });

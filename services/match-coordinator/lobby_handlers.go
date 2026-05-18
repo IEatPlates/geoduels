@@ -26,7 +26,211 @@ import (
 
 var lobbyUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
 
-const lobbyPresenceTTL = 90 * time.Second
+const (
+	defaultLobbyTTL  = 2 * time.Hour
+	lobbyPresenceTTL = 90 * time.Second
+)
+
+func (q *matchCoordinator) createLobby(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	var req contracts.LobbyCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	mode := req.Mode
+	if mode == "" {
+		mode = contracts.ModeDuel
+	}
+	if !contracts.IsPrivatePartyMode(mode) {
+		http.Error(w, "unsupported lobby mode", http.StatusBadRequest)
+		return
+	}
+	snap, err := q.persist.CreateLobby(userID, mode, req.MapScope, defaultLobbyTTL)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+		return
+	}
+	if req.Config.Ruleset != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 {
+		cfg, err := q.lobbySettings.Save(r.Context(), snap.ID, req.Config)
+		if err != nil {
+			http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+			return
+		}
+		snap.Config = cfg
+	} else {
+		snap = q.lobbySettings.Apply(r.Context(), snap)
+	}
+	q.writeJSON(w, snap)
+}
+
+func (q *matchCoordinator) getLobby(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(mux.Vars(r)["code"])
+	snap, ok, err := q.persist.GetLobbyByInviteCode(code)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "lobby not found", http.StatusNotFound)
+		return
+	}
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) joinLobby(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	code := strings.TrimSpace(mux.Vars(r)["code"])
+	snap, found, err := q.persist.GetLobbyByInviteCode(code)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "lobby not found", http.StatusNotFound)
+		return
+	}
+	snap, err = q.persist.JoinLobby(snap.ID, userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) leaveLobby(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, err := q.persist.LeaveLobby(id, userID)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusBadRequest)
+		return
+	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) kickLobbyMember(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	var req contracts.LobbyMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, err := q.persist.KickLobbyMember(id, userID, strings.TrimSpace(req.UserID))
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusBadRequest)
+		return
+	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) transferLobbyOwner(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	var req contracts.LobbyMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, err := q.persist.TransferLobbyOwner(id, userID, strings.TrimSpace(req.UserID))
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusBadRequest)
+		return
+	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) updateLobbyTeam(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	var req contracts.LobbyTeamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, err := q.persist.SetLobbyMemberTeam(id, userID, strings.TrimSpace(req.TeamID))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+}
+
+func (q *matchCoordinator) updateLobbySettings(w http.ResponseWriter, r *http.Request) {
+	userID, ok := q.requirePlayableUser(w, r)
+	if !ok {
+		return
+	}
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, found, err := q.persist.GetLobbyByID(id)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "lobby not found", http.StatusNotFound)
+		return
+	}
+	if snap.OwnerUserID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if snap.State != contracts.LobbyOpen {
+		http.Error(w, "lobby settings are locked", http.StatusConflict)
+		return
+	}
+	var req struct {
+		Mode   contracts.MatchMode   `json:"mode"`
+		Config contracts.MatchConfig `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.Mode != "" && !contracts.IsPrivatePartyMode(req.Mode) {
+		http.Error(w, "unsupported lobby mode", http.StatusBadRequest)
+		return
+	}
+	if req.Mode != "" && req.Mode != snap.Mode {
+		if err := q.persist.SetLobbyMode(snap.ID, req.Mode); err != nil {
+			http.Error(w, "lobby settings unavailable", http.StatusBadGateway)
+			return
+		}
+		snap.Mode = req.Mode
+	}
+	cfg, err := q.lobbySettings.Save(r.Context(), snap.ID, req.Config)
+	if err != nil {
+		http.Error(w, "lobby settings unavailable", http.StatusBadGateway)
+		return
+	}
+	snap.Config = cfg
+	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.writeJSON(w, snap)
+}
 
 func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 	claims, err := q.authenticatedClaims(r)
@@ -165,6 +369,37 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func (q *matchCoordinator) requirePlayableUser(w http.ResponseWriter, r *http.Request) (string, bool) {
+	appClaims, err := q.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return "", false
+	}
+	identity, err := q.persist.GetIdentity(appClaims.Sub)
+	if err != nil {
+		http.Error(w, "identity not found", http.StatusUnauthorized)
+		return "", false
+	}
+	if identity.IsBanned {
+		http.Error(w, "account is banned", http.StatusForbidden)
+		return "", false
+	}
+	if !identity.Onboarded {
+		http.Error(w, "onboarding incomplete", http.StatusForbidden)
+		return "", false
+	}
+	if identity.AuthMigrationRequired {
+		http.Error(w, "connect discord to continue", http.StatusForbidden)
+		return "", false
+	}
+	return appClaims.Sub, true
+}
+
+func (q *matchCoordinator) writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func (q *matchCoordinator) startLobby(w http.ResponseWriter, r *http.Request) {

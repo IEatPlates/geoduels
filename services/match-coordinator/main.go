@@ -105,8 +105,16 @@ func main() {
 	r.HandleFunc("/queue", q.queue).Methods(http.MethodGet)
 	r.HandleFunc("/queue/heartbeat", q.heartbeat).Methods(http.MethodPost)
 	r.HandleFunc("/queue/online", q.online).Methods(http.MethodGet)
+	r.HandleFunc("/lobbies", q.createLobby).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/ws", q.lobbyWS).Methods(http.MethodGet)
 	r.HandleFunc("/lobbies/{id}/start", q.startLobby).Methods(http.MethodPost)
+	r.HandleFunc("/lobbies/{id}/leave", q.leaveLobby).Methods(http.MethodPost)
+	r.HandleFunc("/lobbies/{id}/kick", q.kickLobbyMember).Methods(http.MethodPost)
+	r.HandleFunc("/lobbies/{id}/transfer-owner", q.transferLobbyOwner).Methods(http.MethodPost)
+	r.HandleFunc("/lobbies/{id}/team", q.updateLobbyTeam).Methods(http.MethodPatch)
+	r.HandleFunc("/lobbies/{id}/settings", q.updateLobbySettings).Methods(http.MethodPatch)
+	r.HandleFunc("/lobbies/{code}/join", q.joinLobby).Methods(http.MethodPost)
+	r.HandleFunc("/lobbies/{code}", q.getLobby).Methods(http.MethodGet)
 	r.Handle("/metrics", observability.Handler(q.metrics.Registry)).Methods(http.MethodGet)
 
 	addr := getenv("MATCH_COORDINATOR_ADDR", getenv("QUEUE_COORDINATOR_ADDR", ":8090"))
@@ -585,7 +593,7 @@ func cors(next http.Handler) http.Handler {
 			}
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
