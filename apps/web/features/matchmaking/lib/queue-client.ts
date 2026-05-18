@@ -218,6 +218,7 @@ export async function fetchResumableSession(
 
 export type MatchSessionResponse =
   | { status: 'live_connectable'; matchId: string; mode?: string; config?: MatchConfig; ticket: string; node: string; wsPath: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
+  | { status: 'live_auth_required'; matchId: string }
   | { status: 'history'; matchId: string; snapshot: Snapshot; replacementMatchId?: string; sourceLobbyId?: string; sourceLobbyInviteCode?: string }
   | {
       status: 'replaced';
@@ -301,7 +302,26 @@ function normalizeMatchSessionResponse(data: any, fallbackMatchId: string): Matc
   if (status === 'forbidden') {
     return { status, matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId };
   }
+  if (status === 'live_auth_required') {
+    return { status, matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId };
+  }
   return { status: 'missing', matchId: typeof data?.matchId === 'string' ? data.matchId : fallbackMatchId };
+}
+
+export async function resolveMatchRoute(
+  config: RuntimeConfig,
+  matchId: string,
+  signal: AbortSignal,
+  accessToken?: string
+): Promise<MatchSessionResponse> {
+  const resp = await fetch(`${config.apiURL}/v1/matches/${encodeURIComponent(matchId)}/route`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    signal
+  });
+  if (!resp.ok) {
+    return { status: 'missing', matchId };
+  }
+  return normalizeMatchSessionResponse(await resp.json(), matchId);
 }
 
 export async function fetchMatchSession(

@@ -108,6 +108,7 @@ describe('LobbyScreen', () => {
   it('replaces the tabbed lobby content when an invite lobby is active', () => {
     renderLobbyScreen({
       privateLobby: {
+        status: 'ready',
         snapshot: {
           id: 'lobby-1',
           inviteCode: 'ABCD12',
@@ -139,9 +140,30 @@ describe('LobbyScreen', () => {
     expect(screen.queryByText('Tutorial')).not.toBeInTheDocument();
   });
 
+  it('keeps lobby route intent on a lobby loading surface before the snapshot arrives', () => {
+    renderLobbyScreen({
+      privateLobby: {
+        status: 'connecting',
+        snapshot: null,
+        inviteCode: 'ABCD12',
+        isMember: false,
+        isOwner: false,
+        busy: true,
+        error: ''
+      }
+    });
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Private Lobby' })).toBeInTheDocument();
+    expect(screen.getByText('Connecting to lobby')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'FRIENDS' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'PLAY' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'TOP' })).not.toBeInTheDocument();
+  });
+
   it('disables private lobby start and marks players outside the lobby', () => {
     renderLobbyScreen({
       privateLobby: {
+        status: 'ready',
         snapshot: {
           id: 'lobby-1',
           inviteCode: 'ABCD12',
@@ -178,7 +200,7 @@ describe('LobbyScreen', () => {
   });
 
   it('opens invite lobby choices and joins with a typed code', () => {
-    const joinInviteLobby = vi.fn(async () => undefined);
+    const joinInviteLobby = vi.fn(async () => true);
     renderLobbyScreen({ joinInviteLobby });
 
     expect(screen.queryByRole('button', { name: /Private Lobby/i })).not.toBeInTheDocument();
@@ -203,6 +225,7 @@ describe('LobbyScreen', () => {
   it('shows private lobby lookup errors outside the active lobby panel', () => {
     renderLobbyScreen({
       privateLobby: {
+        status: 'idle',
         snapshot: null,
         inviteCode: 'BAD123',
         isMember: false,

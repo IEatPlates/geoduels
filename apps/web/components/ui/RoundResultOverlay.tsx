@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, type Variants } from 'framer-motion';
 import { MapPin } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
+import { formatDamageMultiplierLabel } from './damage-multiplier';
 import { RESULT_ANIMATION_CONFIG } from './round-result-animation-config';
 import type { RoundResultAnimationConfig, RoundResultOverlayProps } from './types';
 
@@ -183,6 +184,7 @@ export default function RoundResultOverlay({
   const targetSide: Side = isSelfWinner ? 'opp' : 'self';
   const impactReached = phase === 'damage_travel' || phase === 'damage_multiplier' || phase === 'hp_apply';
   const showDamageMultiplier = phase === 'damage_multiplier' || phase === 'hp_apply';
+  const damageMultiplierLabel = showDamageMultiplier ? formatDamageMultiplierLabel(damageMultiplier) : null;
   const hasWinnerMotion = showScores && showCrush && winner !== 'tie' && damage > 0;
   const displayedDamage = showDamageMultiplier ? getAppliedDamage(damage, damageMultiplier) : damage;
   const scoreTravelDurationMs = getScoreTravelDurationMs(animation);
@@ -435,7 +437,7 @@ export default function RoundResultOverlay({
                   className="font-hud absolute grid place-items-center text-5xl leading-none text-white drop-shadow-[0_0_14px_rgba(59,130,246,0.95)]"
                 >
                   <span className="relative grid place-items-center">
-                    {showDamageMultiplier && (
+                    {damageMultiplierLabel && (
                       <span
                         data-testid="damage-multiplier-label"
                         className={`font-hud absolute top-1/2 text-2xl leading-none text-[#ffffff] drop-shadow-md ${targetSide === 'self'
@@ -443,7 +445,7 @@ export default function RoundResultOverlay({
                           : 'left-full translate-x-3 -translate-y-1/2'
                           }`}
                       >
-                        {damageMultiplier.toFixed(1)}x
+                        {damageMultiplierLabel}
                       </span>
                     )}
                     <motion.span

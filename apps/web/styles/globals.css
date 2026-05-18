@@ -45,6 +45,14 @@ body {
 }
 
 @layer components {
+  .app-layer-match-end {
+    z-index: 80;
+  }
+
+  .app-layer-chat {
+    z-index: 120;
+  }
+
   .glass-panel {
     position: relative;
     isolation: isolate;

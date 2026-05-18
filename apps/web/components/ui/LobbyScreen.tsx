@@ -30,6 +30,7 @@ import PlayerNameWithBadge from "./PlayerNameWithBadge";
 import { RatingTrophyIcon } from "./PlayerIdentity";
 import type { LeaderboardSummary } from "../../features/auth/controllers/session-controller";
 import type { LobbySnapshot, LobbyTeamId, PartyMode } from "../../features/lobby/lib/lobby-client";
+import type { LobbyRuntimeStatus } from "../../features/lobby/controllers/lobby-controller";
 import type { GameRuleset, MaintenanceStatus, MatchConfig } from "../../features/matchmaking/lib/queue-client";
 
 type LobbyModal = "help" | "profile" | "invite" | "signin" | null;
@@ -68,6 +69,7 @@ function lobbyTeamPillClass(teamId?: string, active = false) {
 }
 
 type PrivateLobbyView = {
+  status: LobbyRuntimeStatus;
   snapshot: LobbySnapshot | null;
   inviteCode: string;
   isMember: boolean;
@@ -98,8 +100,8 @@ type Props = {
   startSingleplayer: () => void | Promise<string>;
   cancelQueue: () => void;
   privateLobby?: PrivateLobbyView;
-  createInviteLobby?: (mode?: PartyMode) => Promise<void>;
-  joinInviteLobby?: (inviteCode?: string) => Promise<void>;
+  createInviteLobby?: (mode?: PartyMode) => Promise<boolean>;
+  joinInviteLobby?: (inviteCode?: string) => Promise<boolean>;
   leavePrivateLobby?: () => Promise<void>;
   kickLobbyMember?: (userId: string) => Promise<void>;
   transferLobbyOwner?: (userId: string) => Promise<void>;
@@ -119,6 +121,8 @@ type Props = {
   devLogin: () => void;
   onGoogleSignIn: () => void;
   onDiscordSignIn?: () => void;
+  onLinkAuthProvider?: (provider: "google" | "discord") => void;
+  onUpgradeGuestWithProvider?: (provider: "google" | "discord") => void;
   onUnlinkAuthProvider?: (provider: "google" | "discord") => void;
   onBrowseLeaderboard: () => void;
   authLoading: boolean;
@@ -134,6 +138,7 @@ type Props = {
 };
 
 const defaultPrivateLobby: PrivateLobbyView = {
+  status: "idle",
   snapshot: null,
   inviteCode: "",
   isMember: false,
@@ -450,8 +455,8 @@ export default function LobbyScreen({
   startSingleplayer,
   cancelQueue,
   privateLobby = defaultPrivateLobby,
-  createInviteLobby = async () => { },
-  joinInviteLobby = async () => { },
+  createInviteLobby = async () => false,
+  joinInviteLobby = async () => false,
   leavePrivateLobby = async () => { },
   kickLobbyMember = async () => { },
   transferLobbyOwner = async () => { },
@@ -464,6 +469,8 @@ export default function LobbyScreen({
   devLogin,
   onGoogleSignIn,
   onDiscordSignIn = devLogin,
+  onLinkAuthProvider = async () => { },
+  onUpgradeGuestWithProvider = async () => { },
   onUnlinkAuthProvider = async () => { },
   onBrowseLeaderboard,
   authLoading,
@@ -824,7 +831,14 @@ export default function LobbyScreen({
     typeof window !== "undefined" && privateLobby.inviteCode
       ? `${window.location.origin}/lobby/${privateLobby.inviteCode}`
       : "";
-  const privateLobbyActive = !!privateLobby.snapshot;
+  const privateLobbyLoading =
+    !privateLobby.snapshot &&
+    ["creating", "joining", "connecting", "reconnecting"].includes(
+      privateLobby.status,
+    );
+  const privateLobbyActive =
+    !!privateLobby.snapshot ||
+    privateLobby.status !== "idle";
   const lobbyMembers = privateLobby.snapshot?.members || [];
   const lobbyConfig = privateLobby.snapshot?.config || { ruleset: "moving", roundTimerMode: "none", pressureTimeLimitMs: 15000 };
   const lobbyMode = privateLobby.snapshot?.mode || "duel";
@@ -1022,7 +1036,14 @@ export default function LobbyScreen({
               </div>
             ) : null}
 
-            {!privateLobby.isMember ? (
+            {privateLobbyLoading ? (
+              <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
+                <div className="flex min-h-[64px] items-center justify-center text-sm font-semibold text-[#a9bfd4]">
+                  <Loader2 className="mr-2 animate-spin text-[#77f0be]" size={18} />
+                  Connecting to lobby
+                </div>
+              </div>
+            ) : !privateLobby.isMember ? (
               <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
                 <button
                   type="button"
@@ -1385,8 +1406,9 @@ export default function LobbyScreen({
             type="button"
             onClick={() => {
               void (async () => {
-                await createInviteLobby();
-                setOpenModal(null);
+                if (await createInviteLobby()) {
+                  setOpenModal(null);
+                }
               })();
             }}
             disabled={inviteActionsDisabled || playPaused}
@@ -1422,8 +1444,9 @@ export default function LobbyScreen({
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || !normalizedInviteCode) return;
                   void (async () => {
-                    await joinInviteLobby(normalizedInviteCode);
-                    setOpenModal(null);
+                    if (await joinInviteLobby(normalizedInviteCode)) {
+                      setOpenModal(null);
+                    }
                   })();
                 }}
                 disabled={inviteActionsDisabled}
@@ -1436,8 +1459,9 @@ export default function LobbyScreen({
                 type="button"
                 onClick={() => {
                   void (async () => {
-                    await joinInviteLobby(normalizedInviteCode);
-                    setOpenModal(null);
+                    if (await joinInviteLobby(normalizedInviteCode)) {
+                      setOpenModal(null);
+                    }
                   })();
                 }}
                 disabled={inviteActionsDisabled || !normalizedInviteCode}
@@ -1633,7 +1657,7 @@ export default function LobbyScreen({
                   className={`relative flex aspect-square items-center justify-center rounded-2xl border transition ${focused ? "border-[#2ad18f]/70 bg-[#123f2d]/45" : "border-white/10 bg-white/[0.04] hover:bg-white/[0.08]"} ${selected ? "shadow-[0_0_24px_rgba(42,209,143,0.24)]" : ""}`}
                   aria-label={badge.label}
                 >
-                  <PlayerBadge badge={badge} size="lg" muted={!owned} showTooltip={false} />
+                  <PlayerBadge badge={badge} size="lg" muted={!owned} />
                   {selected ? (
                     <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[#2ad18f] shadow-[0_0_10px_rgba(42,209,143,0.8)]" />
                   ) : null}
@@ -1702,7 +1726,7 @@ export default function LobbyScreen({
                 ) : (
                   <button
                     type="button"
-                    onClick={onGoogleSignIn}
+                    onClick={() => onLinkAuthProvider("google")}
                     disabled={authLoading}
                     className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1731,7 +1755,7 @@ export default function LobbyScreen({
                 ) : (
                   <button
                     type="button"
-                    onClick={onDiscordSignIn}
+                    onClick={() => onLinkAuthProvider("discord")}
                     disabled={authLoading}
                     className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1753,7 +1777,28 @@ export default function LobbyScreen({
           <p className="mb-3 text-center text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8cb0a1]">
             Save Progress
           </p>
-          <div className="flex justify-center">{signInButton}</div>
+          <div className="flex flex-wrap justify-center gap-3">
+            {showGoogleButton ? (
+              <button
+                type="button"
+                onClick={() => onUpgradeGuestWithProvider("google")}
+                disabled={authLoading}
+                className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Google
+              </button>
+            ) : null}
+            {showDiscordButton ? (
+              <button
+                type="button"
+                onClick={() => onUpgradeGuestWithProvider("discord")}
+                disabled={authLoading}
+                className="rounded-lg border border-white/10 bg-white/[0.08] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Discord
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

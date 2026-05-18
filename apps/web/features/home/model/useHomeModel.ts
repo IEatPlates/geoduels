@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RESULT_ANIMATION_CONFIG } from "../../../components/ui/round-result-animation-config";
 import { getRuntimeConfig } from "../../../lib/runtime-config";
+import { selectActiveChatConversationId } from "../../chat/lib/chat-scope";
 import {
   requestCompleteOnboarding,
   requestDeleteAccount,
@@ -21,27 +22,15 @@ import {
 } from "../../auth/lib/auth-client";
 import type { AuthSessionSnapshot } from "../../auth/session";
 import {
-  createLobby,
-  fetchLobby,
-  joinLobby,
-  kickLobbyMember as requestKickLobbyMember,
-  leaveLobby,
-  startLobby,
-  streamLobby,
-  transferLobbyOwner as requestTransferLobbyOwner,
-  updateLobbyTeam as requestUpdateLobbyTeam,
-  updateLobbySettings as requestUpdateLobbySettings,
-  applyLobbyPatch,
   type LobbyTeamId,
   type PartyMode,
-  type LobbySnapshot,
 } from "../../lobby/lib/lobby-client";
 import { getHomeRuntime, startHomeRuntime } from "../state/home-runtime";
 import { deriveHomeModel } from "./derive-home-model";
 import type { HomeModel } from "./types";
+import type { ChatEmote } from "../../../components/ui/types";
 import { useLobbyData } from "./useLobbyData";
 import {
-  fetchMatchSession,
   fetchResumableSession,
   type MatchConfig,
 } from "../../matchmaking/lib/queue-client";
@@ -87,22 +76,6 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function mergeLobbySnapshotPreservingPresence(
-  current: LobbySnapshot | null,
-  next: LobbySnapshot,
-): LobbySnapshot {
-  if (!current || current.id !== next.id) return next;
-  const currentMembers = new Map(current.members.map((member) => [member.userId, member]));
-  return {
-    ...next,
-    members: next.members.map((member) => {
-      const existing = currentMembers.get(member.userId);
-      if (!existing || typeof member.connected === "boolean") return member;
-      return { ...member, connected: existing.connected };
-    }),
-  };
-}
-
 function buildSessionFromAuthResponse(
   data: AuthResponse,
   fallback: { userId: string; nicknameInput: string },
@@ -133,7 +106,7 @@ export function useHomeModel(options?: {
 }): HomeModel {
   const config = getRuntimeConfig();
   const runtimeRef = useRef(getHomeRuntime(config));
-  const { sessionController, matchController, gameController, sfxController } =
+  const { sessionController, matchController, matchRouteController, gameController, lobbyController, chatController, sfxController } =
     runtimeRef.current;
   const [homeResumeMatchId, setHomeResumeMatchId] = useState("");
   const routeMatchId = options?.routeMatchId ?? null;
@@ -142,13 +115,7 @@ export function useHomeModel(options?: {
   const onPrivateLobbyEntered = options?.onPrivateLobbyEntered;
   const onPrivateLobbyLeft = options?.onPrivateLobbyLeft;
   const isMatchRoute = routeContext === "match";
-  const [privateLobby, setPrivateLobby] = useState<LobbySnapshot | null>(null);
-  const [pendingLobbyCode, setPendingLobbyCode] = useState("");
-  const [lobbyBusy, setLobbyBusy] = useState(false);
-  const [lobbyError, setLobbyError] = useState("");
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
-  const lobbyStreamAbortRef = useRef<AbortController | null>(null);
-  const handledLobbyMatchRef = useRef("");
 
   const auth = useSyncExternalStore(
     sessionController.subscribe,
@@ -160,10 +127,25 @@ export function useHomeModel(options?: {
     matchController.getState.bind(matchController),
     matchController.getState.bind(matchController),
   );
+  const matchRoute = useSyncExternalStore(
+    matchRouteController.subscribe,
+    matchRouteController.getState.bind(matchRouteController),
+    matchRouteController.getState.bind(matchRouteController),
+  );
   const game = useSyncExternalStore(
     gameController.subscribe,
     gameController.getState.bind(gameController),
     gameController.getState.bind(gameController),
+  );
+  const lobbyState = useSyncExternalStore(
+    lobbyController.subscribe,
+    lobbyController.getState.bind(lobbyController),
+    lobbyController.getState.bind(lobbyController),
+  );
+  const chatState = useSyncExternalStore(
+    chatController.subscribe,
+    chatController.getState.bind(chatController),
+    chatController.getState.bind(chatController),
   );
   const lobbyData = useLobbyData({
     config,
@@ -211,20 +193,24 @@ export function useHomeModel(options?: {
   const googleStartMutation = useMutation({
     mutationFn: ({
       accessToken,
+      intent,
       returnTo,
     }: {
       accessToken?: string;
+      intent?: "signin" | "link" | "upgrade_guest";
       returnTo?: string;
-    }) => requestGoogleStart(config, accessToken, returnTo),
+    }) => requestGoogleStart(config, { accessToken, intent, returnTo }),
   });
   const discordStartMutation = useMutation({
     mutationFn: ({
       accessToken,
+      intent,
       returnTo,
     }: {
       accessToken?: string;
+      intent?: "signin" | "link" | "upgrade_guest";
       returnTo?: string;
-    }) => requestDiscordStart(config, accessToken, returnTo),
+    }) => requestDiscordStart(config, { accessToken, intent, returnTo }),
   });
   const unlinkAuthProviderMutation = useMutation({
     mutationFn: ({
@@ -376,8 +362,7 @@ export function useHomeModel(options?: {
   }
 
   const prevEndedMatchRef = useRef("");
-  const privateLobbyMemberKey =
-    privateLobby?.members.map((member) => member.userId).join("|") || "";
+  const hadLobbyRuntimeRef = useRef(false);
 
   useEffect(() => {
     startHomeRuntime(runtimeRef.current);
@@ -506,141 +491,34 @@ export function useHomeModel(options?: {
     if (isMatchRoute || !lobbyInviteCode) {
       return;
     }
-    if (privateLobby?.inviteCode === lobbyInviteCode) {
-      return;
-    }
-    let cancelled = false;
-    setPendingLobbyCode(lobbyInviteCode);
-    setLobbyError("");
-    void fetchLobby(config, lobbyInviteCode)
-      .then((snap) => {
-        if (!cancelled) {
-          setPrivateLobby(snap);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setPrivateLobby(null);
-          setLobbyError(getErrorMessage(error, "Lobby unavailable"));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [config, isMatchRoute, lobbyInviteCode, privateLobby?.inviteCode]);
-
-  useEffect(() => {
-    const member = privateLobby?.members.find(
-      (item) => item.userId === auth.userId,
-    );
-    if (!privateLobby?.id || !auth.accessToken || !member || isMatchRoute) {
-      lobbyStreamAbortRef.current?.abort();
-      lobbyStreamAbortRef.current = null;
-      return;
-    }
-    const controller = new AbortController();
-    lobbyStreamAbortRef.current?.abort();
-    lobbyStreamAbortRef.current = controller;
-    const handleStarted = async (matchId: string) => {
-      if (!matchId || handledLobbyMatchRef.current === matchId) {
-        return;
-      }
-      const resolved = await fetchMatchSession(
-        config,
-        auth.accessToken,
-        matchId,
-        controller.signal,
-      );
-      if (resolved.status === "live_connectable") {
-        const connected = await matchController.resumeResolvedMatch(resolved, {
-          playMatchFoundSfx: true,
-        });
-        if (connected) {
-          handledLobbyMatchRef.current = matchId;
-        }
-      }
-    };
-    void streamLobby(
-      config,
-      {
-        userId: auth.userId,
-        accessToken: auth.accessToken,
-        onboardingRequired: false,
-        nicknameInput: "",
-      },
-      privateLobby.id,
-      controller.signal,
-      (event) => {
-        if (event.type === "lobby_snapshot") {
-          setPrivateLobby(event.lobby);
-          const activeLobbyMatchId =
-            event.lobby.activeMatchId || event.lobby.startedMatchId || "";
-          if (
-            (event.lobby.state === "in_match" ||
-              event.lobby.state === "started") &&
-            activeLobbyMatchId
-          ) {
-            void handleStarted(activeLobbyMatchId);
-          }
-          return;
-        }
-        if (event.type === "lobby_patch") {
-          setPrivateLobby((current) => {
-            const next = applyLobbyPatch(current, event.patch);
-            const activeLobbyMatchId =
-              next?.activeMatchId || next?.startedMatchId || "";
-            if (
-              next &&
-              (next.state === "in_match" || next.state === "started") &&
-              activeLobbyMatchId
-            ) {
-              void handleStarted(activeLobbyMatchId);
-            }
-            return next;
-          });
-          return;
-        }
-        if (event.type === "match_assigned") {
-          if (handledLobbyMatchRef.current === event.assignment.matchId) {
-            return;
-          }
-          handledLobbyMatchRef.current = event.assignment.matchId;
-          void matchController.resumeResolvedMatch(event.assignment, {
-            playMatchFoundSfx: true,
-          });
-          return;
-        }
-        if (event.type === "lobby_error") {
-          setLobbyError(event.message);
-          if (event.message.toLowerCase().includes("left this lobby")) {
-            lobbyStreamAbortRef.current?.abort();
-            lobbyStreamAbortRef.current = null;
-            setPrivateLobby(null);
-            setPendingLobbyCode("");
-            onPrivateLobbyLeft?.();
-          }
-        }
-      },
-    ).catch((error) => {
-      if (error?.name !== "AbortError") {
-        setLobbyError(getErrorMessage(error, "Lobby connection failed"));
-      }
-    });
-    return () => {
-      controller.abort();
-      if (lobbyStreamAbortRef.current === controller) {
-        lobbyStreamAbortRef.current = null;
-      }
-    };
+    void lobbyController.ensureLobby(lobbyInviteCode);
   }, [
     auth.accessToken,
     auth.userId,
-    config,
     isMatchRoute,
-    matchController,
+    lobbyController,
+    lobbyInviteCode,
+  ]);
+
+  useEffect(() => {
+    const hasLobbyRuntime =
+      !!lobbyState.lobbyId || !!lobbyState.inviteCode || !!lobbyState.snapshot;
+    if (
+      lobbyInviteCode &&
+      hadLobbyRuntimeRef.current &&
+      !hasLobbyRuntime &&
+      lobbyState.status === "idle"
+    ) {
+      onPrivateLobbyLeft?.();
+    }
+    hadLobbyRuntimeRef.current = hasLobbyRuntime;
+  }, [
+    lobbyInviteCode,
+    lobbyState.inviteCode,
+    lobbyState.lobbyId,
+    lobbyState.snapshot,
+    lobbyState.status,
     onPrivateLobbyLeft,
-    privateLobby?.id,
-    privateLobbyMemberKey,
   ]);
 
   useEffect(() => {
@@ -700,6 +578,37 @@ export function useHomeModel(options?: {
     };
   }, [auth.userId, auth.accessToken, auth.onboardingRequired]);
 
+  const routeSourceLobbyId =
+    matchRoute.replacement && "sourceLobbyId" in matchRoute.replacement
+      ? matchRoute.replacement.sourceLobbyId || ""
+      : "";
+  const routeFallbackChatConversationId =
+    isMatchRoute && routeSourceLobbyId
+      ? `lobby:${routeSourceLobbyId}`
+      : isMatchRoute &&
+          routeMatchId &&
+          matchRoute.historySnapshot &&
+          matchRoute.historySnapshot.mode !== "singleplayer"
+        ? `match:${routeMatchId}`
+        : "";
+  const activeChatConversationId = selectActiveChatConversationId({
+    userId: auth.userId,
+    lobby: lobbyState,
+    match,
+  }) || routeFallbackChatConversationId;
+
+  useEffect(() => {
+    chatController.setConversation(
+      auth.onboardingRequired ? "" : activeChatConversationId,
+      auth.accessToken,
+    );
+  }, [
+    activeChatConversationId,
+    auth.accessToken,
+    auth.onboardingRequired,
+    chatController,
+  ]);
+
   const baseView = deriveHomeModel({
     auth,
     match: {
@@ -719,9 +628,20 @@ export function useHomeModel(options?: {
     changelogTitle: lobbyData.changelogTitle,
     changelogMarkdown: lobbyData.changelogMarkdown,
   });
-  const privateLobbyMember = privateLobby?.members.find(
+  const privateLobbyMember = lobbyState.snapshot?.members.find(
     (member) => member.userId === auth.userId,
   );
+  const lobbyBusy = [
+    "creating",
+    "joining",
+    "connecting",
+    "reconnecting",
+    "leaving",
+  ].includes(lobbyState.status);
+  const privateLobbyStatus =
+    lobbyInviteCode && !isMatchRoute && lobbyState.status === "idle"
+      ? "connecting"
+      : lobbyState.status;
   const view = {
     ...baseView,
     overlays: {
@@ -731,13 +651,24 @@ export function useHomeModel(options?: {
     lobby: {
       ...baseView.lobby,
       privateLobby: {
-        snapshot: privateLobby,
-        inviteCode: pendingLobbyCode || privateLobby?.inviteCode || "",
+        status: privateLobbyStatus,
+        snapshot: lobbyState.snapshot,
+        inviteCode:
+          lobbyState.inviteCode ||
+          lobbyState.snapshot?.inviteCode ||
+          lobbyInviteCode ||
+          "",
         isMember: !!privateLobbyMember,
-        isOwner: !!privateLobby && privateLobby.ownerUserId === auth.userId,
+        isOwner: !!lobbyState.snapshot && lobbyState.snapshot.ownerUserId === auth.userId,
         busy: lobbyBusy,
-        error: lobbyError,
+        error: lobbyState.error,
       },
+    },
+    chat: {
+      conversationId: chatState.conversationId,
+      messages: chatState.messages,
+      selfUserId: auth.userId,
+      error: chatState.error,
     },
   };
 
@@ -967,11 +898,8 @@ export function useHomeModel(options?: {
     }
     sessionController.setAuthPending({ authLoading: true, authError: "" });
     try {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
-      });
       const data = await googleStartMutation.mutateAsync({
-        accessToken: session?.accessToken,
+        intent: "signin",
         returnTo: currentReturnTo(),
       });
       if (!data.authURL) {
@@ -993,11 +921,8 @@ export function useHomeModel(options?: {
     }
     sessionController.setAuthPending({ authLoading: true, authError: "" });
     try {
-      const session = await sessionController.ensureFreshSession(60_000, {
-        allowOnboarding: true,
-      });
       const data = await discordStartMutation.mutateAsync({
-        accessToken: session?.accessToken,
+        intent: "signin",
         returnTo: currentReturnTo(),
       });
       if (!data.authURL) {
@@ -1011,6 +936,55 @@ export function useHomeModel(options?: {
       });
     }
   };
+
+  const startProviderIntent = async (
+    provider: "google" | "discord",
+    intent: "link" | "upgrade_guest",
+  ) => {
+    if (typeof window === "undefined") return;
+    if (provider === "google" && !config.googleClientId) return;
+    if (provider === "discord" && !config.discordClientId) return;
+    sessionController.setAuthPending({ authLoading: true, authError: "" });
+    try {
+      const session = await sessionController.ensureFreshSession(60_000, {
+        allowOnboarding: true,
+      });
+      if (!session?.accessToken) {
+        throw new Error(
+          intent === "link"
+            ? "Sign in before linking another method."
+            : "Sign in as a guest before saving progress.",
+        );
+      }
+      const mutation =
+        provider === "google" ? googleStartMutation : discordStartMutation;
+      const data = await mutation.mutateAsync({
+        accessToken: session.accessToken,
+        intent,
+        returnTo: currentReturnTo(),
+      });
+      if (!data.authURL) {
+        throw new Error(`Missing ${provider} auth URL`);
+      }
+      window.location.assign(data.authURL);
+    } catch (error) {
+      sessionController.setAuthPending({
+        authLoading: false,
+        authError: getErrorMessage(
+          error,
+          intent === "link"
+            ? "Failed to link sign-in method"
+            : "Failed to save progress",
+        ),
+      });
+    }
+  };
+
+  const linkAuthProvider = (provider: "google" | "discord") =>
+    startProviderIntent(provider, "link");
+
+  const upgradeGuestWithProvider = (provider: "google" | "discord") =>
+    startProviderIntent(provider, "upgrade_guest");
 
   const unlinkAuthProvider = async (provider: "google" | "discord") => {
     const current = sessionController.getState();
@@ -1065,182 +1039,50 @@ export function useHomeModel(options?: {
     }
   };
 
-  const playableSessionForLobby = async () => {
-    const session = await sessionController.getPlayableSession();
-    if (!session) {
-      setLobbyError("Could not start a guest session.");
-      return null;
-    }
-    return session;
-  };
-
   const createInviteLobby = async (mode: PartyMode = "duel") => {
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const session = await playableSessionForLobby();
-      if (!session) return;
-      const snap = await createLobby(config, session.accessToken, mode);
-      handledLobbyMatchRef.current = "";
-      setPendingLobbyCode(snap.inviteCode);
-      setPrivateLobby(snap);
-      onPrivateLobbyEntered?.(snap.inviteCode);
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Lobby unavailable"));
-    } finally {
-      setLobbyBusy(false);
+    const ok = await lobbyController.createLobby(mode);
+    const inviteCode = lobbyController.getState().inviteCode;
+    if (ok && inviteCode) {
+      onPrivateLobbyEntered?.(inviteCode);
     }
+    return ok;
   };
 
   const joinInviteLobby = async (requestedInviteCode?: string) => {
-    const inviteCode = (
-      requestedInviteCode ||
-      pendingLobbyCode ||
-      privateLobby?.inviteCode ||
-      ""
-    )
-      .trim()
-      .toUpperCase();
-    if (!inviteCode) {
-      setLobbyError("Lobby invite is missing.");
-      return;
+    const ok = await lobbyController.joinLobby(requestedInviteCode);
+    const inviteCode = lobbyController.getState().inviteCode;
+    if (ok && inviteCode) {
+      onPrivateLobbyEntered?.(inviteCode);
     }
-    setPendingLobbyCode(inviteCode);
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const session = await playableSessionForLobby();
-      if (!session) return;
-      const snap = await joinLobby(config, inviteCode, session.accessToken);
-      handledLobbyMatchRef.current = "";
-      setPendingLobbyCode(snap.inviteCode);
-      setPrivateLobby(snap);
-      onPrivateLobbyEntered?.(snap.inviteCode);
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not join lobby"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    return ok;
   };
 
   const leavePrivateLobby = async () => {
-    if (!privateLobby?.id) return;
-    const session = sessionController.getSessionSnapshot();
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      if (session) {
-        await leaveLobby(config, privateLobby.id, session.accessToken);
-      }
-      lobbyStreamAbortRef.current?.abort();
-      lobbyStreamAbortRef.current = null;
-      handledLobbyMatchRef.current = "";
-      setPrivateLobby(null);
-      setPendingLobbyCode("");
+    const hadLobby = !!lobbyController.getState().lobbyId;
+    await lobbyController.leaveLobby();
+    if (hadLobby && lobbyController.getState().status === "idle") {
       onPrivateLobbyLeft?.();
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not leave lobby"));
-    } finally {
-      setLobbyBusy(false);
     }
   };
 
   const kickLobbyMember = async (userId: string) => {
-    if (!privateLobby?.id || !auth.accessToken) return;
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const next = await requestKickLobbyMember(
-          config,
-          privateLobby.id,
-          auth.accessToken,
-          userId,
-        );
-      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not kick player"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    await lobbyController.kickMember(userId);
   };
 
   const transferLobbyOwner = async (userId: string) => {
-    if (!privateLobby?.id || !auth.accessToken) return;
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const next = await requestTransferLobbyOwner(
-          config,
-          privateLobby.id,
-          auth.accessToken,
-          userId,
-        );
-      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not transfer leader"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    await lobbyController.transferOwner(userId);
   };
 
   const startPrivateLobby = async () => {
-    if (!privateLobby?.id || !auth.accessToken) return;
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const assignment = await startLobby(
-        config,
-        privateLobby.id,
-        auth.accessToken,
-      );
-      handledLobbyMatchRef.current = assignment.matchId;
-      await matchController.resumeResolvedMatch(assignment, {
-        playMatchFoundSfx: true,
-      });
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not start lobby"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    await lobbyController.startLobby();
   };
 
   const updatePrivateLobbySettings = async (matchConfig: MatchConfig, mode?: PartyMode) => {
-    if (!privateLobby?.id || !auth.accessToken) return;
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const next = await requestUpdateLobbySettings(
-          config,
-          privateLobby.id,
-          auth.accessToken,
-          matchConfig,
-          mode,
-        );
-      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not update lobby settings"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    await lobbyController.updateSettings(matchConfig, mode);
   };
 
   const switchPrivateLobbyTeam = async (teamId: LobbyTeamId) => {
-    if (!privateLobby?.id || !auth.accessToken) return;
-    setLobbyBusy(true);
-    setLobbyError("");
-    try {
-      const next = await requestUpdateLobbyTeam(
-          config,
-          privateLobby.id,
-          auth.accessToken,
-          teamId,
-        );
-      setPrivateLobby((current) => mergeLobbySnapshotPreservingPresence(current, next));
-    } catch (error) {
-      setLobbyError(getErrorMessage(error, "Could not switch team"));
-    } finally {
-      setLobbyBusy(false);
-    }
+    await lobbyController.switchTeam(teamId);
   };
 
   const reportPlayer = async (
@@ -1287,6 +1129,14 @@ export function useHomeModel(options?: {
     await markUserNotificationRead(config, auth.accessToken, notificationId);
   };
 
+  const sendChatMessage = (body: string) => {
+    return chatController.sendMessage(body);
+  };
+
+  const sendChatEmote = (emote: ChatEmote) => {
+    return chatController.sendEmote(emote);
+  };
+
   return {
     view,
     actions: {
@@ -1306,12 +1156,14 @@ export function useHomeModel(options?: {
       advanceRound: gameController.advanceRound,
       forfeitMatch: gameController.forfeitMatch,
       leaveGame: gameController.leaveGame,
-      sendChatMessage: matchController.sendChatMessage,
-      sendChatEmote: matchController.sendChatEmote,
+      sendChatMessage,
+      sendChatEmote,
       reportPlayer,
       devLogin,
       triggerGoogleSignIn,
       triggerDiscordSignIn,
+      linkAuthProvider,
+      upgradeGuestWithProvider,
       unlinkAuthProvider,
       loadLeaderboard: lobbyData.loadLeaderboard,
       clearAuthSession: logout,

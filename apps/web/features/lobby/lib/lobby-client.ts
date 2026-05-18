@@ -72,6 +72,10 @@ function lobbyHTTPBase(config: RuntimeConfig) {
   return normalizeHTTPBase(config.queueURL).replace(/\/$/, "");
 }
 
+function lobbyWSTarget(config: RuntimeConfig, lobbyId: string, accessToken: string) {
+  return `${normalizeWSBase(config.queueURL).replace(/\/$/, "")}/lobbies/${encodeURIComponent(lobbyId)}/ws?accessToken=${encodeURIComponent(accessToken)}`;
+}
+
 export async function createLobby(config: RuntimeConfig, accessToken: string, mode: PartyMode = "duel"): Promise<LobbySnapshot> {
   const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies`, {
     method: "POST",
@@ -188,7 +192,7 @@ export async function streamLobby(
   signal: AbortSignal,
   onEvent: (event: LobbyEvent) => void,
 ) {
-  const target = `${normalizeWSBase(config.queueURL).replace(/\/$/, "")}/lobbies/${encodeURIComponent(lobbyId)}/ws?accessToken=${encodeURIComponent(session.accessToken)}`;
+  const target = lobbyWSTarget(config, lobbyId, session.accessToken);
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const ws = new WebSocket(target);

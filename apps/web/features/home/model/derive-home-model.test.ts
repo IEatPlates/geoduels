@@ -96,8 +96,7 @@ function createMatchState(snapshot: Snapshot | null): MatchState {
     sourceLobbyInviteCode: '',
     queueError: '',
     connectionIssue: '',
-    onlinePlayers: 42,
-    chatMessages: []
+    onlinePlayers: 42
   };
 }
 

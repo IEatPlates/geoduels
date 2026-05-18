@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { formatDamageMultiplierLabel } from "./damage-multiplier";
 import { PlayerIdentityCard, type ParticipantIdentityView } from "./PlayerIdentity";
 
 type PlayerCardProps = {
@@ -70,6 +71,8 @@ export default function PrematchVersusOverlay({
   countdownLeft,
   damageMultiplier,
 }: Props) {
+  const damageMultiplierLabel = formatDamageMultiplierLabel(damageMultiplier);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -120,7 +123,7 @@ export default function PrematchVersusOverlay({
         />
       </div>
 
-      {damageMultiplier && (
+      {damageMultiplierLabel && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -136,7 +139,7 @@ export default function PrematchVersusOverlay({
             Damage Multiplier
           </span>
           <span className="mt-1 text-5xl font-black text-white drop-shadow-[0_0_15px_rgba(42,209,143,0.5)]">
-            {damageMultiplier.toFixed(1)}x
+            {damageMultiplierLabel}
           </span>
         </motion.div>
       )}

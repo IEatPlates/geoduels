@@ -19,7 +19,6 @@ import (
 
 type matchAccessTestStore struct {
 	persistence.Store
-	identity persistence.Identity
 	snapshot []byte
 }
 
@@ -31,14 +30,18 @@ func (s *matchAccessTestStore) GetFinalMatchSnapshot(matchID string) ([]byte, bo
 }
 
 func (s *matchAccessTestStore) GetIdentity(sub string) (persistence.Identity, error) {
-	return s.identity, nil
+	return persistence.Identity{Sub: sub}, nil
 }
 
 func (s *matchAccessTestStore) GetRuntimeMatch(matchID string) (persistence.RuntimeMatch, bool, error) {
 	return persistence.RuntimeMatch{}, false, nil
 }
 
-func TestFinalMatchSnapshotAccessAllowsModerators(t *testing.T) {
+func (s *matchAccessTestStore) GetLobbyByMatchID(matchID string) (contracts.LobbySnapshot, bool, error) {
+	return contracts.LobbySnapshot{}, false, nil
+}
+
+func TestPublicFinalMatchSnapshotIsAvailableToAnyViewer(t *testing.T) {
 	raw, err := json.Marshal(contracts.MatchSnapshot{
 		MatchID: "match-1",
 		State:   contracts.MatchEnded,
@@ -51,51 +54,49 @@ func TestFinalMatchSnapshotAccessAllowsModerators(t *testing.T) {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
 
-	tests := []struct {
-		name     string
-		userID   string
-		identity persistence.Identity
-		allowed  bool
-	}{
-		{
-			name:    "participant",
-			userID:  "player-1",
-			allowed: true,
+	a := &api{store: &matchAccessTestStore{snapshot: raw}}
+	snapshot, found, err := a.getPublicFinalMatchSnapshot("match-1")
+	if err != nil {
+		t.Fatalf("get snapshot: %v", err)
+	}
+	if !found || snapshot == nil {
+		t.Fatal("expected snapshot to be found")
+	}
+}
+
+func TestMatchRouteReturnsPublicHistoryWithoutAuth(t *testing.T) {
+	raw, err := json.Marshal(contracts.MatchSnapshot{
+		MatchID: "match-1",
+		State:   contracts.MatchEnded,
+		Phase:   contracts.PhaseEnded,
+		Players: map[string]contracts.PlayerState{
+			"player-1": {UserID: "player-1", LastGuessLat: 1, LastGuessLng: 2, Disconnected: true},
+			"player-2": {UserID: "player-2"},
 		},
-		{
-			name:     "admin",
-			userID:   "admin-1",
-			identity: persistence.Identity{Sub: "admin-1", IsAdmin: true},
-			allowed:  true,
-		},
-		{
-			name:     "moderator",
-			userID:   "moderator-1",
-			identity: persistence.Identity{Sub: "moderator-1", IsModerator: true},
-			allowed:  true,
-		},
-		{
-			name:     "stranger",
-			userID:   "stranger-1",
-			identity: persistence.Identity{Sub: "stranger-1"},
-			allowed:  false,
-		},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := &api{store: &matchAccessTestStore{identity: tt.identity, snapshot: raw}}
-			snapshot, found, allowed, err := a.getFinalMatchSnapshotForUser("match-1", tt.userID)
-			if err != nil {
-				t.Fatalf("get snapshot: %v", err)
-			}
-			if !found || snapshot == nil {
-				t.Fatal("expected snapshot to be found")
-			}
-			if allowed != tt.allowed {
-				t.Fatalf("allowed = %v, want %v", allowed, tt.allowed)
-			}
-		})
+	a := &api{store: &matchAccessTestStore{snapshot: raw}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/matches/match-1/route", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": "match-1"})
+	rec := httptest.NewRecorder()
+
+	a.matchRoute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	var resp contracts.MatchSessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "history" || resp.Snapshot == nil {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if got := resp.Snapshot.Players["player-1"]; got.LastGuessLat != 0 || got.LastGuessLng != 0 || got.Disconnected {
+		t.Fatalf("snapshot was not sanitized: %+v", got)
 	}
 }
 
@@ -140,7 +141,7 @@ func TestMatchSessionAllowsGuestAssignedToLiveMatch(t *testing.T) {
 	}
 
 	a := &api{
-		store:          &matchAccessTestStore{identity: persistence.Identity{Sub: "guest-2", AccountType: "guest"}},
+		store:          &matchAccessTestStore{},
 		coord:          coordStore,
 		appAuthSecret:  appSecret,
 		ticketAuth:     ticketSecret,

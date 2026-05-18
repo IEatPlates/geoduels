@@ -43,6 +43,8 @@ type matchCoordinator struct {
 	internal      string
 	metrics       *observability.APIMetrics
 	draining      atomic.Bool
+	chatMu        sync.Mutex
+	chatRecent    map[string][]time.Time
 }
 
 var queueUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
@@ -94,6 +96,7 @@ func main() {
 		ticketAuth:    ticketSecret,
 		internal:      internalSecret,
 		metrics:       observability.NewAPIMetrics(),
+		chatRecent:    map[string][]time.Time{},
 	}
 	defer q.persist.Close()
 	defer redisCleanup()
@@ -105,6 +108,7 @@ func main() {
 	r.HandleFunc("/queue", q.queue).Methods(http.MethodGet)
 	r.HandleFunc("/queue/heartbeat", q.heartbeat).Methods(http.MethodPost)
 	r.HandleFunc("/queue/online", q.online).Methods(http.MethodGet)
+	r.HandleFunc("/chat/ws", q.chatWS).Methods(http.MethodGet)
 	r.HandleFunc("/lobbies", q.createLobby).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/ws", q.lobbyWS).Methods(http.MethodGet)
 	r.HandleFunc("/lobbies/{id}/start", q.startLobby).Methods(http.MethodPost)

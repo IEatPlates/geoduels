@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRuntimeConfigFixture } from '../../../test/runtime-config.fixture';
-import { bootstrapMatchSession, fetchMatchSession } from './queue-client';
+import { bootstrapMatchSession, fetchMatchSession, resolveMatchRoute } from './queue-client';
 
 describe('queue-client match bootstrap', () => {
   const originalFetch = global.fetch;
@@ -82,5 +82,34 @@ describe('queue-client match bootstrap', () => {
         wsPath: '/ws/game-1'
       }
     });
+  });
+
+  it('resolves a public history route without an access token', async () => {
+    global.fetch = vi.fn(async (_input, init) => {
+      expect(init?.headers).toBeUndefined();
+      return {
+        ok: true,
+        json: async () => ({
+          status: 'history',
+          matchId: 'match-1',
+          snapshot: {
+            matchId: 'match-1',
+            state: 'ended',
+            phase: 'ended',
+            roundPhase: 'ended',
+            phaseStartedAt: 0,
+            phaseEndsAt: 0,
+            roundMsLeft: 0,
+            players: {},
+            eventSequence: 1
+          }
+        })
+      } as Response;
+    }) as typeof fetch;
+
+    const response = await resolveMatchRoute(runtimeConfig, 'match-1', new AbortController().signal);
+
+    expect(response.status).toBe('history');
+    expect(response.matchId).toBe('match-1');
   });
 });

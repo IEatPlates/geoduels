@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import EndMatchOverlay from "../../components/ui/EndMatchOverlay";
 import type { Snapshot } from "../../components/ui/types";
 import { requestMatchReport } from "../../features/auth/lib/auth-client";
+import HomePageChatDock from "../../features/home/page/HomePageChatDock";
 import HomePageGame from "../../features/home/page/HomePageGame";
 import HomePageOverlays from "../../features/home/page/HomePageOverlays";
 import { useHomeModel } from "../../features/home/model/useHomeModel";
@@ -234,6 +235,7 @@ export default function MatchPage() {
           maxHP={model.view.meta.maxHP}
           actions={{ ...model.actions, leaveGame: handleLeaveToLobby }}
         />
+        <HomePageChatDock chat={model.view.chat} actions={model.actions} />
         {!model.view.game.inGame &&
           !model.view.overlays.endMatch.open &&
           historyOverlay && (

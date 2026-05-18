@@ -45,6 +45,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         changelogTitle: "Latest",
         changelogMarkdown: "",
         privateLobby: {
+          status: "idle",
           snapshot: null,
           inviteCode: "",
           isMember: false,
@@ -110,8 +111,13 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         modeName: "Moving",
         mapName: "A Source World",
         streetViewInteractive: true,
-        chatMessages: [],
         selfUserId: "self",
+      },
+      chat: {
+        conversationId: "",
+        messages: [],
+        selfUserId: "self",
+        error: "",
       },
       overlays: {
         onboardingOpen: true,
@@ -189,8 +195,8 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
       sendChatMessage: vi.fn(() => true),
       sendChatEmote: vi.fn(() => true),
       reportPlayer: vi.fn(async () => {}),
-      createInviteLobby: vi.fn(async () => {}),
-      joinInviteLobby: vi.fn(async () => {}),
+      createInviteLobby: vi.fn(async () => true),
+      joinInviteLobby: vi.fn(async () => true),
       leavePrivateLobby: vi.fn(async () => {}),
       kickLobbyMember: vi.fn(async () => {}),
       transferLobbyOwner: vi.fn(async () => {}),
@@ -200,6 +206,8 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
       devLogin: vi.fn(async () => null),
       triggerGoogleSignIn: vi.fn(async () => {}),
       triggerDiscordSignIn: vi.fn(async () => {}),
+      linkAuthProvider: vi.fn(async () => {}),
+      upgradeGuestWithProvider: vi.fn(async () => {}),
       unlinkAuthProvider: vi.fn(async () => {}),
       loadLeaderboard: vi.fn(),
       clearAuthSession: vi.fn(),
@@ -220,5 +228,24 @@ describe("HomePageView", () => {
     expect(screen.getByText("Choose Your Nickname")).toBeInTheDocument();
     expect(screen.getByText("Match Complete")).toBeInTheDocument();
     expect(screen.queryByTitle("Street View")).not.toBeInTheDocument();
+  });
+
+  it("keeps chat on the top app layer over the match end page", () => {
+    render(
+      <HomePageView
+        model={createModel({
+          chat: {
+            conversationId: "match:match-1",
+            messages: [],
+            selfUserId: "self",
+            error: "",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("Open chat").parentElement).toHaveClass(
+      "app-layer-chat",
+    );
   });
 });

@@ -282,11 +282,11 @@ func (s *recoverTestStore) RecordRuntimeMatch(matchID, state string, ownerEpoch 
 	return nil
 }
 
-func (s *recoverTestStore) RecordMatchChatMessage(message persistence.MatchChatMessage) error {
+func (s *recoverTestStore) RecordChatMessage(conversationID, scopeKind, scopeID string, message persistence.ChatMessage) error {
 	panic("unexpected call")
 }
 
-func (s *recoverTestStore) ListMatchChatMessages(matchID string, limit int) ([]persistence.MatchChatMessage, error) {
+func (s *recoverTestStore) ListChatMessages(conversationID string, limit int) ([]persistence.ChatMessage, error) {
 	panic("unexpected call")
 }
 

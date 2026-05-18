@@ -534,11 +534,12 @@ func (s *pgStore) getLobby(whereClause, value string) (contracts.LobbySnapshot, 
 func (s *pgStore) listLobbyMembers(ctx context.Context, lobbyID string) ([]contracts.LobbyMember, error) {
 	rows, err := s.pool.Query(ctx, `
 		select m.user_id, u.display_name, coalesce(u.avatar_url, ''),
-	       u.account_type = 'guest',
-	       coalesce(u.is_admin, false),
-	       coalesce(u.selected_badge_id, ''),
-	       coalesce(m.team_id, ''),
-	       m.role, m.ready, m.joined_at
+			u.account_type = 'guest',
+			coalesce(u.is_admin, false),
+			coalesce(u.selected_badge_code, 0),
+			coalesce(u.selected_badge_season_id, ''),
+			coalesce(m.team_id, ''),
+			m.role, m.ready, m.joined_at
 		from lobby_members m
 		join users u on u.id = m.user_id
 		where m.lobby_id = $1 and m.left_at is null
@@ -551,11 +552,12 @@ func (s *pgStore) listLobbyMembers(ctx context.Context, lobbyID string) ([]contr
 	out := []contracts.LobbyMember{}
 	for rows.Next() {
 		var member contracts.LobbyMember
-		var selectedBadgeID string
-		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeID, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
+		var selectedBadgeCode int16
+		var selectedBadgeSeasonID string
+		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeCode, &selectedBadgeSeasonID, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
 			return nil, err
 		}
-		_, selectedBadge, err := s.profileBadges(ctx, member.UserID, selectedBadgeID)
+		_, selectedBadge, err := s.profileBadges(ctx, member.UserID, badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID))
 		if err != nil {
 			return nil, err
 		}

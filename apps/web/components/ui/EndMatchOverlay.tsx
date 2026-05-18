@@ -338,7 +338,7 @@ export default function EndMatchOverlay({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className={`flex flex-col ${asPage ? "h-screen bg-[#0d1216]" : "absolute inset-0 z-50 bg-[#0d1216]/90 backdrop-blur-md"}`}
+      className={`flex flex-col ${asPage ? "app-layer-match-end fixed inset-0 bg-[#0d1216]" : "absolute inset-0 z-50 bg-[#0d1216]/90 backdrop-blur-md"}`}
     >
       <div className="flex-1 min-h-0 w-full relative">
         {hasRoundResults ? (
@@ -492,7 +492,7 @@ export default function EndMatchOverlay({
       </div>
 
       {pendingReport ? (
-        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+        <div className="absolute inset-0 z-[1200] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[24px] border border-white/10 bg-[#101922] p-6 text-white shadow-[0_24px_80px_rgba(0,0,0,0.5)]">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full border border-red-300/25 bg-red-500/15 text-red-100">

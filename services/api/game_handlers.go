@@ -214,19 +214,14 @@ func (a *api) optionalAuthenticatedClaims(r *http.Request) (auth.AppClaims, bool
 }
 
 func (a *api) match(w http.ResponseWriter, r *http.Request) {
-	claims, err := a.authenticatedClaims(r)
-	if err != nil {
+	if _, err := a.authenticatedClaims(r); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	id := mux.Vars(r)["id"]
-	snapshot, found, allowed, err := a.getFinalMatchSnapshotForUser(id, claims.Sub)
+	snapshot, found, err := a.getPublicFinalMatchSnapshot(id)
 	if err != nil || !found {
 		http.Error(w, "match not found", http.StatusNotFound)
-		return
-	}
-	if !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	_ = json.NewEncoder(w).Encode(snapshot)
@@ -248,6 +243,26 @@ func (a *api) matchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := a.resolveMatchSession(r.Context(), claims.Sub, matchID)
+	if err != nil {
+		http.Error(w, "match unavailable", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (a *api) matchRoute(w http.ResponseWriter, r *http.Request) {
+	matchID := strings.TrimSpace(mux.Vars(r)["id"])
+	if matchID == "" {
+		http.Error(w, "invalid match", http.StatusBadRequest)
+		return
+	}
+	claims, authenticated := a.optionalAuthenticatedClaims(r)
+	userID := ""
+	if authenticated {
+		userID = claims.Sub
+	}
+	resp, err := a.resolveMatchRoute(r.Context(), userID, authenticated, matchID)
 	if err != nil {
 		http.Error(w, "match unavailable", http.StatusBadGateway)
 		return
@@ -303,6 +318,27 @@ func (a *api) sessionResumable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) resolveMatchSession(ctx context.Context, userID, targetMatchID string) (contracts.MatchSessionResponse, error) {
+	return a.resolveMatchRoute(ctx, userID, true, targetMatchID)
+}
+
+func (a *api) resolveMatchRoute(ctx context.Context, userID string, authenticated bool, targetMatchID string) (contracts.MatchSessionResponse, error) {
+	history, found, err := a.getPublicFinalMatchSnapshot(targetMatchID)
+	if err != nil {
+		return contracts.MatchSessionResponse{}, err
+	}
+	if found && !authenticated {
+		resp := contracts.MatchSessionResponse{Status: "history", MatchID: targetMatchID, Snapshot: history}
+		a.attachLobbyReturn(&resp, targetMatchID)
+		return resp, nil
+	}
+
+	if !authenticated {
+		if rec, ok, err := a.store.GetRuntimeMatch(targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+			return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
+		}
+		return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
+	}
+
 	if assigned, ok, err := a.coord.GetAssignmentByUser(ctx, userID); err == nil && ok {
 		switch a.launcher().ValidateAssignment(ctx, assigned) {
 		case matchlaunch.AssignmentValid:
@@ -326,11 +362,7 @@ func (a *api) resolveMatchSession(ctx context.Context, userID, targetMatchID str
 				}
 				return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
 			}
-			history, found, allowed, err := a.getFinalMatchSnapshotForUser(targetMatchID, userID)
-			if err != nil {
-				return contracts.MatchSessionResponse{}, err
-			}
-			if found && allowed {
+			if found {
 				resp := contracts.MatchSessionResponse{
 					Status:             "history",
 					MatchID:            targetMatchID,
@@ -361,17 +393,13 @@ func (a *api) resolveMatchSession(ctx context.Context, userID, targetMatchID str
 		}
 	}
 
-	snapshot, found, allowed, err := a.getFinalMatchSnapshotForUser(targetMatchID, userID)
-	if err != nil {
-		return contracts.MatchSessionResponse{}, err
-	}
 	if found {
-		if !allowed {
-			return contracts.MatchSessionResponse{Status: "forbidden", MatchID: targetMatchID}, nil
-		}
-		resp := contracts.MatchSessionResponse{Status: "history", MatchID: targetMatchID, Snapshot: snapshot}
+		resp := contracts.MatchSessionResponse{Status: "history", MatchID: targetMatchID, Snapshot: history}
 		a.attachLobbyReturn(&resp, targetMatchID)
 		return resp, nil
+	}
+	if rec, ok, err := a.store.GetRuntimeMatch(targetMatchID); err == nil && ok && rec.State != string(contracts.MatchEnded) {
+		return contracts.MatchSessionResponse{Status: "live_auth_required", MatchID: targetMatchID}, nil
 	}
 	return contracts.MatchSessionResponse{Status: "missing", MatchID: targetMatchID}, nil
 }
@@ -388,22 +416,39 @@ func (a *api) attachLobbyReturn(resp *contracts.MatchSessionResponse, matchID st
 	resp.SourceLobbyInviteCode = lobby.InviteCode
 }
 
-func (a *api) getFinalMatchSnapshotForUser(matchID, userID string) (*contracts.MatchSnapshot, bool, bool, error) {
+func (a *api) getPublicFinalMatchSnapshot(matchID string) (*contracts.MatchSnapshot, bool, error) {
 	raw, ok, err := a.store.GetFinalMatchSnapshot(matchID)
 	if err != nil || !ok {
-		return nil, ok, false, err
+		return nil, ok, err
 	}
 	var snapshot contracts.MatchSnapshot
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		return nil, false, false, err
+		return nil, false, err
 	}
-	if _, ok := snapshot.Players[userID]; !ok {
-		if identity, err := a.store.GetIdentity(userID); err == nil && (identity.IsAdmin || identity.IsModerator) {
-			return &snapshot, true, true, nil
+	snapshot = sanitizeFinalMatchSnapshot(snapshot)
+	if snapshot.State == "" {
+		snapshot.State = contracts.MatchEnded
+	}
+	return &snapshot, true, nil
+}
+
+func sanitizeFinalMatchSnapshot(snapshot contracts.MatchSnapshot) contracts.MatchSnapshot {
+	if snapshot.State == contracts.MatchEnded {
+		snapshot.CurrentRound = nil
+		snapshot.RoundMSLeft = 0
+		snapshot.PhaseEndsAt = 0
+		snapshot.GraceWindowSec = 0
+		for id, player := range snapshot.Players {
+			player.Finalized = false
+			player.LastGuessLat = 0
+			player.LastGuessLng = 0
+			player.HasGuess = false
+			player.Disconnected = false
+			player.DisconnectDue = 0
+			snapshot.Players[id] = player
 		}
-		return &snapshot, true, false, nil
 	}
-	return &snapshot, true, true, nil
+	return snapshot
 }
 
 func (a *api) createMatchReport(w http.ResponseWriter, r *http.Request) {

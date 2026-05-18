@@ -772,8 +772,9 @@ const (
 	ChatEmoteSunglasses ChatEmote = "sunglasses"
 )
 
-type MatchChatMessage struct {
+type ChatMessage struct {
 	ID                string          `json:"id"`
+	ConversationID    string          `json:"conversationId,omitempty"`
 	MatchID           string          `json:"matchId"`
 	SenderUserID      string          `json:"senderUserId"`
 	SenderDisplayName string          `json:"senderDisplayName"`
@@ -799,5 +800,4 @@ const (
 	ErrCommandDuplicate = "ERR_COMMAND_DUPLICATE"
 	ErrResumeInvalid    = "ERR_RESUME_INVALID"
 	ErrRateLimited      = "ERR_RATE_LIMITED"
-	ErrInvalidChat      = "ERR_INVALID_CHAT"
 )

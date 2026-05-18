@@ -111,7 +111,7 @@ export default function GameStartOverlay({
       key="game-start-overlay"
       initial={{ opacity: 1 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 1, y: 48 }}
+      exit={{ opacity: 0, y: 48 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="absolute inset-0 z-[100] pointer-events-none overflow-hidden"
     >

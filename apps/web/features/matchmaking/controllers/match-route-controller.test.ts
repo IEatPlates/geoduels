@@ -14,7 +14,17 @@ describe('MatchRouteController', () => {
     const listeners = new Set<() => void>();
     let matchState = { snapshot: null as any };
 
-    global.fetch = vi.fn(async () => {
+    global.fetch = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.includes('/route')) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'live_auth_required',
+            matchId: 'solo-123'
+          })
+        } as Response;
+      }
       return {
         ok: true,
         json: async () => ({

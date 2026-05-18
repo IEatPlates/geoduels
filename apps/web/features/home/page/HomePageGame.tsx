@@ -17,8 +17,6 @@ type HomePageGameProps = {
     | "advanceRound"
     | "forfeitMatch"
     | "leaveGame"
-    | "sendChatMessage"
-    | "sendChatEmote"
   >;
 };
 
@@ -119,10 +117,7 @@ export default function HomePageGame({
       totalRounds={game.totalRounds}
       modeName={game.modeName}
       mapName={game.mapName}
-      chatMessages={game.chatMessages}
       selfUserId={game.selfUserId}
-      onSendChatMessage={actions.sendChatMessage}
-      onSendChatEmote={actions.sendChatEmote}
     />
   );
 }

@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import { formatDamageMultiplierLabel } from './damage-multiplier';
 
 type Props = {
   mm: string;
@@ -34,7 +35,7 @@ export default function GameHUD({
   const topY = inset;
   const bottomY = height - inset;
   const progressPath = `M ${centerX} ${topY} H ${leftX} A ${radius} ${radius} 0 0 0 ${leftX} ${bottomY} H ${rightX} A ${radius} ${radius} 0 0 0 ${rightX} ${topY} H ${centerX}`;
-  const multiplierLabel = `${Number(damageMultiplier.toFixed(1))}x`;
+  const multiplierLabel = formatDamageMultiplierLabel(damageMultiplier);
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-[91px] z-40 animate-hudSlideIn md:top-4">
@@ -87,7 +88,7 @@ export default function GameHUD({
             )}
           </AnimatePresence>
 
-          {!hideMultiplier && (
+          {!hideMultiplier && multiplierLabel && (
             <div
               data-testid="multiplier-badge"
               className="font-hud relative grid h-[54px] w-[58px] shrink-0 place-items-center text-[20px] tracking-[-0.03em] text-[#dfffee] drop-shadow-[0_8px_16px_rgba(0,0,0,0.28)] md:h-[60px] md:w-[66px] md:text-[20px]"

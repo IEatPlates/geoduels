@@ -2,6 +2,8 @@ import type { RuntimeConfig } from "../../../lib/runtime-config";
 import { readError } from "../../../lib/http";
 import type { LeaderboardSummary } from "../controllers/session-controller";
 
+export type OAuthIntent = "signin" | "link" | "upgrade_guest";
+
 export async function requestSession(config: RuntimeConfig) {
   const resp = await fetch(`${config.apiURL}/v1/auth/session`, {
     credentials: "include",
@@ -167,17 +169,23 @@ export async function requestUpdateSelectedBadge(
 
 export async function requestGoogleStart(
   config: RuntimeConfig,
-  accessToken?: string,
-  returnTo?: string,
+  params: {
+    intent?: OAuthIntent;
+    accessToken?: string;
+    returnTo?: string;
+  } = {},
 ) {
   const resp = await fetch(`${config.apiURL}/v1/auth/google/start`, {
     method: "POST",
     credentials: "include",
     headers: {
       "content-type": "application/json",
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(params.accessToken ? { Authorization: `Bearer ${params.accessToken}` } : {}),
     },
-    body: JSON.stringify({ returnTo }),
+    body: JSON.stringify({
+      intent: params.intent || "signin",
+      returnTo: params.returnTo,
+    }),
   });
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to start Google sign-in"));
@@ -187,17 +195,23 @@ export async function requestGoogleStart(
 
 export async function requestDiscordStart(
   config: RuntimeConfig,
-  accessToken?: string,
-  returnTo?: string,
+  params: {
+    intent?: OAuthIntent;
+    accessToken?: string;
+    returnTo?: string;
+  } = {},
 ) {
   const resp = await fetch(`${config.apiURL}/v1/auth/discord/start`, {
     method: "POST",
     credentials: "include",
     headers: {
       "content-type": "application/json",
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(params.accessToken ? { Authorization: `Bearer ${params.accessToken}` } : {}),
     },
-    body: JSON.stringify({ returnTo }),
+    body: JSON.stringify({
+      intent: params.intent || "signin",
+      returnTo: params.returnTo,
+    }),
   });
   if (!resp.ok) {
     throw new Error(await readError(resp, "Failed to start Discord sign-in"));

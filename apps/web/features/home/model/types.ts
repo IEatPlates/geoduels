@@ -1,5 +1,6 @@
 import type { LeaderboardSummary } from "../../auth/controllers/session-controller";
 import type { UserNotification } from "../../auth/lib/auth-client";
+import type { LobbyRuntimeStatus } from "../../lobby/controllers/lobby-controller";
 import type { LobbySnapshot, LobbyTeamId, PartyMode } from "../../lobby/lib/lobby-client";
 import type { MaintenanceStatus } from "../../matchmaking/lib/queue-client";
 import type {
@@ -62,6 +63,7 @@ export type HomeLobbyView = {
   changelogTitle: string;
   changelogMarkdown: string;
   privateLobby: {
+    status: LobbyRuntimeStatus;
     snapshot: LobbySnapshot | null;
     inviteCode: string;
     isMember: boolean;
@@ -132,7 +134,6 @@ export type HomeGameView = {
   modeName: string;
   mapName: string;
   streetViewInteractive: boolean;
-  chatMessages: ChatMessage[];
   selfUserId: string;
 };
 
@@ -175,10 +176,18 @@ export type HomeOverlaysView = {
     | { open: false };
 };
 
+export type HomeChatView = {
+  conversationId: string;
+  messages: ChatMessage[];
+  selfUserId: string;
+  error: string;
+};
+
 export type HomeViewModel = {
   auth: HomeAuthView;
   lobby: HomeLobbyView;
   game: HomeGameView;
+  chat: HomeChatView;
   overlays: HomeOverlaysView;
   meta: {
     activeMatchId: string;
@@ -192,8 +201,8 @@ export type HomeActions = {
   joinQueue: (rulesets?: GameRuleset[]) => void;
   startSingleplayer: () => Promise<string>;
   cancelQueue: () => void;
-  createInviteLobby: (mode?: PartyMode) => Promise<void>;
-  joinInviteLobby: (inviteCode?: string) => Promise<void>;
+  createInviteLobby: (mode?: PartyMode) => Promise<boolean>;
+  joinInviteLobby: (inviteCode?: string) => Promise<boolean>;
   leavePrivateLobby: () => Promise<void>;
   kickLobbyMember: (userId: string) => Promise<void>;
   transferLobbyOwner: (userId: string) => Promise<void>;
@@ -215,6 +224,8 @@ export type HomeActions = {
   devLogin: () => Promise<unknown>;
   triggerGoogleSignIn: () => Promise<void>;
   triggerDiscordSignIn?: () => Promise<void>;
+  linkAuthProvider: (provider: "google" | "discord") => Promise<void>;
+  upgradeGuestWithProvider: (provider: "google" | "discord") => Promise<void>;
   unlinkAuthProvider: (provider: "google" | "discord") => Promise<void>;
   loadLeaderboard: () => void;
   clearAuthSession: (message?: string) => void;

@@ -514,6 +514,7 @@ export function deriveHomeModel({
       changelogTitle,
       changelogMarkdown,
       privateLobby: {
+        status: "idle",
         snapshot: null,
         inviteCode: "",
         isMember: false,
@@ -591,8 +592,13 @@ export function deriveHomeModel({
           : "Moving",
       mapName: ruleset === "nmpz" ? "A Location World" : "A Source World",
       streetViewInteractive: ruleset !== "nmpz",
-      chatMessages: match.chatMessages,
       selfUserId: selfId,
+    },
+    chat: {
+      conversationId: "",
+      messages: [],
+      selfUserId: selfId,
+      error: "",
     },
     overlays: {
       onboardingOpen: auth.onboardingRequired && !!auth.userId,

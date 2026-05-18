@@ -37,7 +37,7 @@ export default function HomePageOverlays({
         onSubmit={() => void actions.submitOnboardingNickname()}
       />
       {activeNotification?.type === "mmr_refund" ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 px-4">
           <div className="w-full max-w-sm rounded-2xl border border-[#2ad18f]/30 bg-[#0b1620] p-5 text-white shadow-2xl">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-[#2ad18f]">
               Rating refunded
@@ -49,11 +49,6 @@ export default function HomePageOverlays({
               A player you lost to was banned for cheating. Your rating has been
               recalculated from your current MMR and refunded.
             </p>
-            {typeof activeNotification.payload.mmrAfter === "number" ? (
-              <p className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-[#dbe7ff]">
-                New MMR: {activeNotification.payload.mmrAfter}
-              </p>
-            ) : null}
             <button
               type="button"
               onClick={() =>

@@ -199,6 +199,7 @@ export type ChatEmote = "skull" | "sob" | "thinking" | "sunglasses";
 
 export type ChatMessage = {
   id: string;
+  conversationId?: string;
   matchId: string;
   senderUserId: string;
   senderDisplayName: string;

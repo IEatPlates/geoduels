@@ -1,4 +1,4 @@
-import type { ChatEmote, ChatMessage, Snapshot } from '../../../components/ui/types';
+import type { Snapshot } from '../../../components/ui/types';
 import type { SfxController } from '../../../lib/audio/sfx';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
 import { ObservableStore } from '../../../lib/observable-store';
@@ -24,7 +24,6 @@ export type MatchState = {
   queueError: string;
   connectionIssue: string;
   onlinePlayers: number;
-  chatMessages: ChatMessage[];
 };
 
 const initialState: MatchState = {
@@ -36,8 +35,7 @@ const initialState: MatchState = {
   sourceLobbyInviteCode: '',
   queueError: '',
   connectionIssue: '',
-  onlinePlayers: 0,
-  chatMessages: []
+  onlinePlayers: 0
 };
 
 export class MatchController extends ObservableStore<MatchState> {
@@ -98,17 +96,8 @@ export class MatchController extends ObservableStore<MatchState> {
         this.noteServerActivity();
         this.patchState({
           activeMatchId: snapshot.matchId || this.state.activeMatchId,
-          snapshot,
-          chatMessages: this.state.snapshot?.matchId === snapshot.matchId ? this.state.chatMessages : []
+          snapshot
         });
-      },
-      onChatMessage: (message) => {
-        this.noteServerActivity();
-        if (message.matchId && this.state.activeMatchId && message.matchId !== this.state.activeMatchId) return;
-        this.patchState({
-          chatMessages: [...this.state.chatMessages.filter((item) => item.id !== message.id), message].slice(-60)
-        });
-        this.playChatSfx();
       },
       onAckError: (message) => {
         this.patchState({ queueError: message });
@@ -233,7 +222,6 @@ export class MatchController extends ObservableStore<MatchState> {
       sourceLobbyInviteCode: '',
       queueError: '',
       connectionIssue: '',
-      chatMessages: []
     });
   };
 
@@ -475,20 +463,6 @@ export class MatchController extends ObservableStore<MatchState> {
   private playMatchFoundSfx() {
     this.sfxController?.play('duel-game-start');
   }
-
-  private playChatSfx() {
-    this.sfxController?.play('chat');
-  }
-
-  sendChatMessage = (body: string) => {
-    const trimmed = body.trim();
-    if (!trimmed) return false;
-    return this.sendGameCommand('chat.send', { body: trimmed }, { errorMessage: this.config.gameConnectionErrorMessage });
-  };
-
-  sendChatEmote = (emote: ChatEmote) => {
-    return this.sendGameCommand('chat.emote', { emote }, { errorMessage: this.config.gameConnectionErrorMessage });
-  };
 
   sendGameCommand = (type: string, payload: Record<string, unknown>, options?: SendGameCommandOptions) => {
     if (!this.socketClient.isOpen()) {

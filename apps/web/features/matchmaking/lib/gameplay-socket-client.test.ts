@@ -45,7 +45,6 @@ describe('GameplaySocketClient', () => {
       onError: vi.fn(),
       onActivity: vi.fn(),
       onSnapshot,
-      onChatMessage: vi.fn(),
       onAckError: vi.fn(),
       onProtocolError: vi.fn()
     });

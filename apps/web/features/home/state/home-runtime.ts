@@ -3,16 +3,20 @@ import { getRuntimeConfig } from '../../../lib/runtime-config';
 import { createSfxController } from '../../../lib/audio/browser-sfx-controller';
 import type { SfxController } from '../../../lib/audio/sfx';
 import { SessionController } from '../../auth/controllers/session-controller';
+import { ChatController } from '../../chat/controllers/chat-controller';
 import { GameController } from '../../game/controllers/game-controller';
+import { LobbyController } from '../../lobby/controllers/lobby-controller';
 import { MatchController } from '../../matchmaking/controllers/match-controller';
 import { MatchRouteController } from '../../matchmaking/controllers/match-route-controller';
 
 export type HomeRuntime = {
   config: RuntimeConfig;
   sessionController: SessionController;
+  lobbyController: LobbyController;
   matchController: MatchController;
   matchRouteController: MatchRouteController;
   gameController: GameController;
+  chatController: ChatController;
   sfxController: SfxController;
   started: boolean;
 };
@@ -26,12 +30,21 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
   runtime.sfxController = createSfxController();
   runtime.sessionController = new SessionController({
     config,
-    onResetSession: () => runtime.matchController.resetConnectionState()
+    onResetSession: () => {
+      runtime.matchController.resetConnectionState();
+      runtime.lobbyController?.reset();
+      runtime.chatController?.reset();
+    }
   });
   runtime.matchController = new MatchController({
     config,
     sessionController: runtime.sessionController,
     sfxController: runtime.sfxController
+  });
+  runtime.lobbyController = new LobbyController({
+    config,
+    sessionController: runtime.sessionController,
+    matchController: runtime.matchController
   });
   runtime.matchRouteController = new MatchRouteController({
     config,
@@ -42,6 +55,10 @@ function createHomeRuntime(config: RuntimeConfig): HomeRuntime {
     config,
     matchController: runtime.matchController,
     sessionController: runtime.sessionController,
+    sfxController: runtime.sfxController
+  });
+  runtime.chatController = new ChatController({
+    config,
     sfxController: runtime.sfxController
   });
   return runtime;

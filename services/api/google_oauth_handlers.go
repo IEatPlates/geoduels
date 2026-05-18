@@ -22,6 +22,7 @@ import (
 const oauthStateTTL = 5 * time.Minute
 
 type oauthStateClaims struct {
+	Intent   string `json:"intent,omitempty"`
 	Origin   string `json:"origin"`
 	ReturnTo string `json:"returnTo,omitempty"`
 	LinkSub  string `json:"linkSub,omitempty"`
@@ -107,6 +108,7 @@ func (a *api) googleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ReturnTo string `json:"returnTo"`
+		Intent   string `json:"intent"`
 	}
 	if err := decodeJSONBody(r, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -123,17 +125,23 @@ func (a *api) googleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	intent := normalizeOAuthIntent(req.Intent)
+	linkSub, err := a.oauthLinkSubject(r, intent)
+	if err != nil {
+		http.Error(w, oauthStartError(intent), http.StatusUnauthorized)
+		return
+	}
+
 	state := oauthStateClaims{
+		Intent:   intent,
 		Origin:   origin,
 		ReturnTo: sanitizeOAuthReturnPath(req.ReturnTo),
+		LinkSub:  linkSub,
 		Nonce:    randomHex(16),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(oauthStateTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
-	}
-	if claims, err := a.authenticatedClaims(r); err == nil {
-		state.LinkSub = claims.Sub
 	}
 	stateToken := jwt.NewWithClaims(jwt.SigningMethodHS256, state)
 	signedState, err := stateToken.SignedString(a.appAuthSecret)

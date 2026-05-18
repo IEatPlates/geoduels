@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, MessageCircle, Send, LogOut, RotateCcw, X } from 'lucide-react';
-import { useEffect, useRef, useState, useMemo, type FormEvent, type ReactNode } from 'react';
+import { AlertTriangle, LogOut, RotateCcw, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from 'react';
 import GameHUD from '../ui/GameHUD';
 import MinimapPanel from '../ui/MinimapPanel';
 import PlayerHPCard from '../ui/PlayerHPCard';
@@ -11,11 +11,11 @@ import IntroCountdownText from '../ui/IntroCountdownText';
 import { PlayerIdentityRow } from '../ui/PlayerIdentity';
 import { motionPresetClass } from '../ui/motion';
 import { ResultDistanceBar } from '../ui/RoundResultOverlay';
-import type { ChatEmote, ChatMessage, RatingDeltaPreview, RoundResultOverlayProps, UIPhase } from '../ui/types';
+import type { RatingDeltaPreview, RoundResultOverlayProps, UIPhase } from '../ui/types';
 import type { PlayerBadgeInfo } from '../ui/PlayerBadge';
 import type { ParticipantIdentityView } from '../ui/PlayerIdentity';
 
-type InGameSceneProps = {
+export type InGameSceneProps = {
   uiPhase: UIPhase;
   streetViewSrc: string;
   streetViewInteractive: boolean;
@@ -74,204 +74,8 @@ type InGameSceneProps = {
   totalRounds?: number;
   modeName?: string;
   mapName?: string;
-  chatMessages: ChatMessage[];
   selfUserId: string;
-  onSendChatMessage: (body: string) => boolean;
-  onSendChatEmote: (emote: ChatEmote) => boolean;
 };
-
-const chatEmotes: Array<{ emote: ChatEmote; label: string; glyph: string }> = [
-  { emote: 'skull', label: 'Skull', glyph: '💀' },
-  { emote: 'sob', label: 'Sob', glyph: '😭' },
-  { emote: 'thinking', label: 'Thinking', glyph: '🤔' },
-  { emote: 'sunglasses', label: 'Sunglasses', glyph: '😎' }
-];
-
-function emoteGlyph(emote?: ChatEmote) {
-  return chatEmotes.find((item) => item.emote === emote)?.glyph || '';
-}
-
-function MatchChatPanel({
-  messages,
-  selfUserId,
-  onSendMessage,
-  onSendEmote
-}: {
-  messages: ChatMessage[];
-  selfUserId: string;
-  onSendMessage: (body: string) => boolean;
-  onSendEmote: (emote: ChatEmote) => boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [body, setBody] = useState('');
-  const [previewMessage, setPreviewMessage] = useState<ChatMessage | null>(null);
-  const [previewVisible, setPreviewVisible] = useState(false);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const initialMessagesSeenRef = useRef(false);
-  const latestMessageIdRef = useRef<string | null>(null);
-  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const node = scrollRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [messages, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    });
-  }, [open]);
-
-  useEffect(() => {
-    const latestMessage = messages[messages.length - 1];
-    if (!initialMessagesSeenRef.current) {
-      initialMessagesSeenRef.current = true;
-      latestMessageIdRef.current = latestMessage?.id ?? null;
-      return;
-    }
-
-    if (!latestMessage) {
-      latestMessageIdRef.current = null;
-      return;
-    }
-
-    if (latestMessageIdRef.current === latestMessage.id) return;
-    latestMessageIdRef.current = latestMessage.id;
-
-    if (latestMessage.senderUserId === selfUserId) return;
-
-    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
-    setPreviewMessage(latestMessage);
-    setPreviewVisible(true);
-    previewTimerRef.current = setTimeout(() => {
-      setPreviewVisible(false);
-      previewTimerRef.current = null;
-    }, 4200);
-  }, [messages, selfUserId]);
-
-  useEffect(() => {
-    return () => {
-      if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
-    };
-  }, []);
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const sent = onSendMessage(body);
-    if (sent) setBody('');
-  };
-
-  return (
-    <div className="absolute left-3 top-24 z-40 w-[min(calc(100vw-1.5rem),21rem)] md:left-4 md:top-28">
-      {open ? (
-        <div className="relative rounded-[14px] border border-white/10 bg-[rgba(7,12,18,0.75)] p-3 text-white">
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label="Close chat"
-            className="absolute right-3 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-white/75 transition hover:bg-white/10 hover:text-white"
-          >
-            <X size={15} strokeWidth={2.5} />
-          </button>
-          <div
-            ref={scrollRef}
-            className="scrollbar-hidden flex max-h-48 flex-col gap-1 overflow-y-auto pr-10 text-[13px] font-semibold leading-snug [text-shadow:0_1px_5px_rgba(0,0,0,0.7)]"
-          >
-            {messages.length === 0 ? (
-              <p className="py-8 text-center text-sm font-semibold text-white/45 [text-shadow:none]">No messages yet</p>
-            ) : (
-              messages.map((message) => {
-                const self = message.senderUserId === selfUserId;
-                return (
-                  <p key={message.id} className="break-words text-white/90">
-                    <span className={`mr-1 font-bold ${self ? 'text-[#7effbd]' : 'text-[#9fd4ff]'}`}>
-                      {message.senderDisplayName}
-                    </span>
-                    <span className={message.kind === 'emote' ? 'text-lg leading-none' : ''}>
-                      {message.kind === 'emote' ? emoteGlyph(message.emote) : message.body}
-                    </span>
-                  </p>
-                );
-              })
-            )}
-          </div>
-          <div className="mt-3 flex gap-2">
-            {chatEmotes.map((item) => (
-              <button
-                key={item.emote}
-                type="button"
-                onClick={() => onSendEmote(item.emote)}
-                aria-label={item.label}
-                title={item.label}
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl [text-shadow:0_1px_5px_rgba(0,0,0,0.65)] transition hover:bg-white/[0.12]"
-              >
-                {item.glyph}
-              </button>
-            ))}
-          </div>
-          <form onSubmit={submit} className="mt-3 flex gap-2">
-            <input
-              ref={inputRef}
-              value={body}
-              onChange={(event) => setBody(event.target.value.slice(0, 180))}
-              maxLength={180}
-              className="min-w-0 flex-1 rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-[#22d385]/50"
-              placeholder="Message"
-            />
-            <button
-              type="submit"
-              aria-label="Send message"
-              disabled={!body.trim()}
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#22d385] text-white transition hover:bg-[#2ae091] disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              <Send size={16} strokeWidth={2.5} />
-            </button>
-          </form>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Open chat"
-          className="flex h-11 max-w-[min(calc(100vw-1.5rem),19rem)] items-center gap-2 rounded-pill border border-white/10 bg-[rgba(7,12,18,0.25)] px-3 text-left text-white/85 transition hover:bg-[rgba(7,12,18,0.35)] hover:text-white"
-        >
-          <MessageCircle size={17} strokeWidth={2.4} className="flex-shrink-0 text-white/65" />
-          <span className="relative block min-w-0 flex-1 overflow-hidden pr-1 text-sm font-semibold leading-none">
-            <AnimatePresence mode="wait" initial={false}>
-              {previewVisible && previewMessage ? (
-                <motion.span
-                  key={previewMessage.id}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.28, ease: 'easeOut' }}
-                  className="block truncate"
-                >
-                  {previewMessage.kind === 'emote' ? emoteGlyph(previewMessage.emote) : previewMessage.body || ''}
-                </motion.span>
-              ) : (
-                <motion.span
-                  key="placeholder"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2, ease: 'easeOut' }}
-                  className="block truncate text-white/65"
-                >
-                  Message...
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </span>
-        </button>
-      )}
-    </div>
-  );
-}
 
 export default function InGameScene({
   uiPhase,
@@ -332,20 +136,24 @@ export default function InGameScene({
   totalRounds,
   modeName = 'Moving',
   mapName = 'A Source World',
-  chatMessages,
-  selfUserId,
-  onSendChatMessage,
-  onSendChatEmote
+  selfUserId
 }: InGameSceneProps) {
   const showGuessAlertBorder = opponentGuessAlert;
   const [confirmForfeit, setConfirmForfeit] = useState(false);
   const [forfeitRequested, setForfeitRequested] = useState(false);
   const [streetViewResetCount, setStreetViewResetCount] = useState(0);
+  const sceneRef = useRef<HTMLElement | null>(null);
+  const streetViewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const canShowForfeit = uiPhase !== 'match_end';
-  const showMatchChat = !isSingleplayer && canShowForfeit;
-  const utilityControlPosition = `absolute left-3 z-40 pointer-events-auto md:bottom-4 md:left-4 md:top-auto ${
-    showMatchChat ? 'top-40' : 'top-3'
-  }`;
+  const utilityControlPosition = 'absolute left-3 top-3 z-40 pointer-events-auto md:bottom-4 md:left-4 md:top-auto';
+
+  const releaseStreetViewFocus = useCallback(() => {
+    const frame = streetViewFrameRef.current;
+    if (!frame || document.activeElement !== frame) return;
+
+    frame.blur();
+    sceneRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const playerScores = useMemo(() => {
     if (partyMode !== "free_for_all" || !roundResults.length) return [];
@@ -403,6 +211,17 @@ export default function InGameScene({
     setStreetViewResetCount(0);
   }, [streetViewSrc]);
 
+  useEffect(() => {
+    if (uiPhase !== 'live_round' && uiPhase !== 'prematch_countdown') return;
+
+    const handleWindowBlur = () => {
+      window.setTimeout(releaseStreetViewFocus, 0);
+    };
+
+    window.addEventListener('blur', handleWindowBlur);
+    return () => window.removeEventListener('blur', handleWindowBlur);
+  }, [releaseStreetViewFocus, uiPhase]);
+
   const handleForfeitConfirm = () => {
     const sent = onForfeit();
     if (!sent) {
@@ -419,13 +238,20 @@ export default function InGameScene({
   };
 
   return (
-    <section className={`fixed inset-0 overflow-hidden ${motionPresetClass.reveal}`}>
+    <section
+      ref={sceneRef}
+      tabIndex={-1}
+      className={`fixed inset-0 overflow-hidden focus:outline-none ${motionPresetClass.reveal}`}
+    >
       {(uiPhase === 'live_round' || uiPhase === 'prematch_countdown') && (
         <div className="absolute inset-0 overflow-hidden">
           <iframe
             key={`${streetViewSrc}-${streetViewResetCount}`}
+            ref={streetViewFrameRef}
             title="Street View"
             src={streetViewSrc}
+            tabIndex={-1}
+            onFocus={releaseStreetViewFocus}
             className={`absolute left-0 top-[-75px] h-[calc(100%+75px)] w-full border-0 ${streetViewInteractive ? '' : 'pointer-events-none'}`}
             allowFullScreen
             loading="eager"
@@ -633,15 +459,6 @@ export default function InGameScene({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {showMatchChat && (
-        <MatchChatPanel
-          messages={chatMessages}
-          selfUserId={selfUserId}
-          onSendMessage={onSendChatMessage}
-          onSendEmote={onSendChatEmote}
-        />
-      )}
 
       {uiPhase === 'live_round' && (
         <MinimapPanel onFinalize={onFinalizeGuess} canFinalizeGuess={canFinalizeGuess} guessSubmitted={guessSubmitted}>

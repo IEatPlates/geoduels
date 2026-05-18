@@ -178,7 +178,8 @@ func (a *api) adminMatchChat(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	messages, err := a.store.ListMatchChatMessages(strings.TrimSpace(mux.Vars(r)["id"]), limit)
+	matchID := strings.TrimSpace(mux.Vars(r)["id"])
+	messages, err := a.store.ListChatMessages("match:"+matchID, limit)
 	if err != nil {
 		http.Error(w, "chat log unavailable", http.StatusInternalServerError)
 		return

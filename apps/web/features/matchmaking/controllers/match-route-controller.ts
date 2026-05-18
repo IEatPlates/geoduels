@@ -5,7 +5,7 @@ import type { SessionController } from '../../auth/controllers/session-controlle
 import type { MatchController } from './match-controller';
 import {
   bootstrapMatchSession,
-  fetchMatchSession,
+  resolveMatchRoute,
   type MatchSessionResponse
 } from '../lib/queue-client';
 import type { RuntimeConfig } from '../../../lib/runtime-config';
@@ -177,6 +177,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
       case 'replaced':
         this.patchState({ status: 'replaced', replacement: resolved, historySnapshot: null });
         return;
+      case 'live_auth_required':
       case 'forbidden':
         this.patchState({ status: 'forbidden', historySnapshot: null, replacement: null });
         return;
@@ -193,6 +194,14 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     this.patchState({ historySnapshot: null, replacement: null });
 
     try {
+      const existingSession = this.sessionController.getSessionSnapshot();
+      this.patchState({ status: 'resolving' });
+      const publicResolved = await resolveMatchRoute(this.config, matchId, requestController.signal, existingSession?.accessToken);
+      if (publicResolved.status !== 'live_auth_required') {
+        await this.handleResolvedMatch(matchId, publicResolved, seq);
+        return;
+      }
+
       if (!this.sessionController.getSessionSnapshot()) {
         this.patchState({ status: 'bootstrapping_auth' });
         const bootstrapped = await bootstrapMatchSession(this.config, matchId, requestController.signal);
@@ -216,7 +225,7 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
       }
 
       this.patchState({ status: 'resolving' });
-      const resolved = await fetchMatchSession(this.config, session.accessToken, matchId, requestController.signal);
+      const resolved = await resolveMatchRoute(this.config, matchId, requestController.signal, session.accessToken);
       await this.handleResolvedMatch(matchId, resolved, seq);
     } catch (error: any) {
       if (error?.name === 'AbortError') return;

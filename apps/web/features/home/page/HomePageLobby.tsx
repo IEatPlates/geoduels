@@ -27,6 +27,8 @@ type HomePageLobbyProps = {
     | "devLogin"
     | "triggerGoogleSignIn"
     | "triggerDiscordSignIn"
+    | "linkAuthProvider"
+    | "upgradeGuestWithProvider"
     | "unlinkAuthProvider"
     | "loadLeaderboard"
     | "submitProfileNickname"
@@ -101,6 +103,8 @@ export default function HomePageLobby({
       devLogin={actions.devLogin}
       onGoogleSignIn={actions.triggerGoogleSignIn}
       onDiscordSignIn={actions.triggerDiscordSignIn || actions.triggerGoogleSignIn}
+      onLinkAuthProvider={actions.linkAuthProvider}
+      onUpgradeGuestWithProvider={actions.upgradeGuestWithProvider}
       onUnlinkAuthProvider={actions.unlinkAuthProvider}
       onBrowseLeaderboard={actions.loadLeaderboard}
       authLoading={auth.authLoading}

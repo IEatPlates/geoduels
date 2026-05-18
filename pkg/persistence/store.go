@@ -26,6 +26,9 @@ const (
 	moderationProjectionAdvisoryKey = int64(0x67646d6f646572)
 	IdentityProviderGoogle          = "google"
 	IdentityProviderDiscord         = "discord"
+	badgeCodeDiscordMember          = int16(1)
+	badgeCodeGeoDuelsTeam           = int16(2)
+	badgeCodeSeasonRank             = int16(10)
 )
 
 type Profile struct {
@@ -218,7 +221,7 @@ type RuntimeMatch struct {
 	EndedAt    time.Time
 }
 
-type MatchChatMessage = contracts.MatchChatMessage
+type ChatMessage = contracts.ChatMessage
 
 type Store interface {
 	UpsertProviderIdentity(provider, providerUserID, email, providerName, avatarURL, linkUserID string) (Identity, error)
@@ -278,8 +281,8 @@ type Store interface {
 	IsSignupIPBanned(ipAddress string) (bool, error)
 	GetRuntimeMatch(matchID string) (RuntimeMatch, bool, error)
 	RecordRuntimeMatch(matchID, state string, ownerEpoch int64, terminal bool) error
-	RecordMatchChatMessage(message MatchChatMessage) error
-	ListMatchChatMessages(matchID string, limit int) ([]MatchChatMessage, error)
+	RecordChatMessage(conversationID, scopeKind, scopeID string, message ChatMessage) error
+	ListChatMessages(conversationID string, limit int) ([]ChatMessage, error)
 	ExpireStaleRuntimeMatches(prefix string, olderThan time.Duration) error
 	ExpireOpenLobbies() error
 	ListOpenLobbyIDs() ([]string, error)
@@ -1474,8 +1477,6 @@ func (s *pgStore) RolloverRankedSeason(nextSeasonID string) (RankedSeasonRollove
 	if previousSeasonID == nextSeasonID {
 		return RankedSeasonRolloverResult{}, errors.New("season is already active")
 	}
-	badgeID := seasonRankBadgeID(previousSeasonID)
-	displaySeason := seasonBadgeDisplayName(previousSeasonID)
 	badgeTag, err := tx.Exec(ctx, `
 		with ranked as (
 			select
@@ -1488,20 +1489,16 @@ func (s *pgStore) RolloverRankedSeason(nextSeasonID string) (RankedSeasonRollove
 				and coalesce(u.account_type, 'registered') <> 'guest'
 				and u.banned_at is null
 		)
-		insert into user_badges(user_id, badge_id, kind, label, description, image_url, season_id, rank)
+		insert into user_badges(user_id, badge_code, badge_season_id, rank)
 		select
 			user_id,
 			$3,
-			'season_rank',
-			$4 || ' #' || rank::text,
-			'Finished #' || rank::text || ' in ' || $4 || '.',
-			'/medals/platinum-medal.png',
 			$2,
 			rank
 		from ranked
 		where rank between 1 and 100
-		on conflict (user_id, badge_id) do nothing
-	`, modeDuel, previousSeasonID, badgeID, displaySeason)
+		on conflict (user_id, badge_code, badge_season_id) do nothing
+	`, modeDuel, previousSeasonID, badgeCodeSeasonRank)
 	if err != nil {
 		return RankedSeasonRolloverResult{}, err
 	}
@@ -2029,7 +2026,8 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 				coalesce(u.is_moderator, false) as is_moderator,
 				coalesce(u.banned_at is not null, false) as is_banned,
 				coalesce(u.ban_reason, '') as ban_reason,
-				coalesce(u.selected_badge_id, '') as selected_badge_id
+				coalesce(u.selected_badge_code, 0) as selected_badge_code,
+				coalesce(u.selected_badge_season_id, '') as selected_badge_season_id
 		from (select $1 as user_id) seed
 		left join users u on u.id = seed.user_id
 		left join lateral (
@@ -2043,7 +2041,8 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		left join user_stats us on us.user_id = seed.user_id
 		left join ranked_stats rs on rs.user_id = seed.user_id and rs.mode = $2 and rs.season_id = $3
 	`, userID, modeDuel, seasonID, initialMMR, initialRatingRD)
-	var selectedBadgeID string
+	var selectedBadgeCode int16
+	var selectedBadgeSeasonID string
 	if err := row.Scan(
 		&p.DisplayName,
 		&p.AvatarURL,
@@ -2058,14 +2057,15 @@ func (s *pgStore) GetProfile(userID string) (Profile, error) {
 		&p.IsModerator,
 		&p.IsBanned,
 		&p.BanReason,
-		&selectedBadgeID,
+		&selectedBadgeCode,
+		&selectedBadgeSeasonID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return p, nil
 		}
 		return p, err
 	}
-	badges, selected, err := s.profileBadges(ctx, userID, selectedBadgeID)
+	badges, selected, err := s.profileBadges(ctx, userID, badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID))
 	if err != nil {
 		return p, err
 	}
@@ -2098,10 +2098,16 @@ func (s *pgStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 			return Profile{}, errors.New("badge unavailable")
 		}
 	}
+	ref, ok := badgeRefFromID(badgeID)
+	if badgeID != "" && !ok {
+		return Profile{}, errors.New("badge unavailable")
+	}
 	if _, err := s.pool.Exec(ctx, `
-		update users set selected_badge_id = nullif($2, '')
+		update users
+		set selected_badge_code = nullif($2, 0),
+			selected_badge_season_id = $3
 		where id = $1
-	`, userID, badgeID); err != nil {
+	`, userID, ref.Code, ref.SeasonID); err != nil {
 		return Profile{}, err
 	}
 	return s.GetProfile(userID)
@@ -2110,10 +2116,10 @@ func (s *pgStore) UpdateSelectedBadge(userID, badgeID string) (Profile, error) {
 func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID string) ([]contracts.PlayerBadge, *contracts.PlayerBadge, error) {
 	badges := []contracts.PlayerBadge{}
 	rows, err := s.pool.Query(ctx, `
-		select badge_id, kind, label, description, image_url, coalesce(season_id, ''), coalesce(rank, 0)
-		from user_badges
-		where user_id = $1
-		order by awarded_at desc, badge_id asc
+		select ub.badge_code, coalesce(ub.badge_season_id, ''), coalesce(ub.rank, 0)
+		from user_badges ub
+		where ub.user_id = $1
+		order by ub.awarded_at desc, ub.badge_code asc, ub.badge_season_id asc
 	`, userID)
 	if err != nil {
 		return nil, nil, err
@@ -2122,11 +2128,16 @@ func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID str
 	hasDiscord := false
 	ownedSeasonBadges := map[string]bool{}
 	for rows.Next() {
-		var badge contracts.PlayerBadge
-		if err := rows.Scan(&badge.ID, &badge.Kind, &badge.Label, &badge.Description, &badge.ImageURL, &badge.SeasonID, &badge.Rank); err != nil {
+		var code int16
+		var seasonID string
+		var rank int
+		if err := rows.Scan(&code, &seasonID, &rank); err != nil {
 			return nil, nil, err
 		}
-		badge.Owned = true
+		badge, ok := badgeFromParts(code, seasonID, rank, true)
+		if !ok {
+			continue
+		}
 		if badge.ID == "discord-member" {
 			hasDiscord = true
 		}
@@ -2149,7 +2160,7 @@ func (s *pgStore) profileBadges(ctx context.Context, userID, selectedBadgeID str
 			Kind:        "community",
 			Label:       "Discord Member",
 			Description: "Awarded for linking Discord to your GeoDuels account.",
-			ImageURL:    "/medals/discord-medal.png",
+			ImageURL:    "/medals/discord-medal.v1.png",
 			Owned:       false,
 		})
 	}
@@ -2185,7 +2196,7 @@ func seasonRankBadgeTemplate(seasonID string) contracts.PlayerBadge {
 		Kind:        "season_rank",
 		Label:       displaySeason + " Top 100",
 		Description: "Awarded to players who finish in the top 100 when " + displaySeason + " ends.",
-		ImageURL:    "/medals/platinum-medal.png",
+		ImageURL:    "/medals/platinum-medal.v1.png",
 		SeasonID:    seasonID,
 		Owned:       false,
 	}
@@ -2193,6 +2204,81 @@ func seasonRankBadgeTemplate(seasonID string) contracts.PlayerBadge {
 
 func seasonRankBadgeID(seasonID string) string {
 	return "season-" + strings.TrimSpace(seasonID) + "-top-100"
+}
+
+type badgeRef struct {
+	Code     int16
+	SeasonID string
+}
+
+func badgeRefFromID(id string) (badgeRef, bool) {
+	id = strings.TrimSpace(id)
+	switch id {
+	case "":
+		return badgeRef{}, true
+	case "discord-member":
+		return badgeRef{Code: badgeCodeDiscordMember}, true
+	case "geoduels-team":
+		return badgeRef{Code: badgeCodeGeoDuelsTeam}, true
+	default:
+		if strings.HasPrefix(id, "season-") && strings.HasSuffix(id, "-top-100") {
+			seasonID := strings.TrimSuffix(strings.TrimPrefix(id, "season-"), "-top-100")
+			if strings.TrimSpace(seasonID) == "" {
+				return badgeRef{}, false
+			}
+			return badgeRef{Code: badgeCodeSeasonRank, SeasonID: seasonID}, true
+		}
+		return badgeRef{}, false
+	}
+}
+
+func badgeIDFromParts(code int16, seasonID string) string {
+	switch code {
+	case badgeCodeDiscordMember:
+		return "discord-member"
+	case badgeCodeGeoDuelsTeam:
+		return "geoduels-team"
+	case badgeCodeSeasonRank:
+		if strings.TrimSpace(seasonID) != "" {
+			return seasonRankBadgeID(seasonID)
+		}
+	}
+	return ""
+}
+
+func badgeFromParts(code int16, seasonID string, rank int, owned bool) (contracts.PlayerBadge, bool) {
+	switch code {
+	case badgeCodeDiscordMember:
+		return contracts.PlayerBadge{
+			ID:          "discord-member",
+			Kind:        "community",
+			Label:       "Discord Member",
+			Description: "Awarded for linking Discord to your GeoDuels account.",
+			ImageURL:    "/medals/discord-medal.v1.png",
+			Owned:       owned,
+		}, true
+	case badgeCodeGeoDuelsTeam:
+		return contracts.PlayerBadge{
+			ID:          "geoduels-team",
+			Kind:        "special",
+			Label:       "GeoDuels Team",
+			Description: "An exclusive medal for GeoDuels moderators and team members.",
+			ImageURL:    "/medals/team-badge.v1.png",
+			Owned:       owned,
+		}, true
+	case badgeCodeSeasonRank:
+		badge := seasonRankBadgeTemplate(seasonID)
+		badge.Rank = rank
+		badge.Owned = owned
+		if owned && rank > 0 {
+			displaySeason := seasonBadgeDisplayName(seasonID)
+			badge.Label = displaySeason + " #" + fmt.Sprint(rank)
+			badge.Description = "Finished #" + fmt.Sprint(rank) + " in " + displaySeason + "."
+		}
+		return badge, strings.TrimSpace(seasonID) != ""
+	default:
+		return contracts.PlayerBadge{}, false
+	}
 }
 
 func seasonBadgeDisplayName(seasonID string) string {
@@ -2212,50 +2298,43 @@ func seasonBadgeDisplayName(seasonID string) string {
 
 func awardDiscordMemberBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	_, err := tx.Exec(ctx, `
-		insert into user_badges(user_id, badge_id, kind, label, description, image_url)
+		insert into user_badges(user_id, badge_code)
 		values(
 			$1,
-			'discord-member',
-			'community',
-			'Discord Member',
-			'Awarded for linking Discord to your GeoDuels account.',
-			'/medals/discord-medal.png'
+			$2
 		)
-		on conflict (user_id, badge_id) do nothing
-	`, userID)
+		on conflict (user_id, badge_code, badge_season_id) do nothing
+	`, userID, badgeCodeDiscordMember)
 	return err
 }
 
 func awardGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	_, err := tx.Exec(ctx, `
-		insert into user_badges(user_id, badge_id, kind, label, description, image_url)
+		insert into user_badges(user_id, badge_code)
 		values(
 			$1,
-			'geoduels-team',
-			'special',
-			'GeoDuels Team',
-			'An exclusive medal for GeoDuels moderators and team members.',
-			'/medals/team-badge.png'
+			$2
 		)
-		on conflict (user_id, badge_id) do nothing
-	`, userID)
+		on conflict (user_id, badge_code, badge_season_id) do nothing
+	`, userID, badgeCodeGeoDuelsTeam)
 	return err
 }
 
 func removeGeoDuelsTeamBadgeTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	if _, err := tx.Exec(ctx, `
 		update users
-		set selected_badge_id = null
+		set selected_badge_code = null,
+			selected_badge_season_id = ''
 		where id = $1
-			and selected_badge_id = 'geoduels-team'
-	`, userID); err != nil {
+			and selected_badge_code = $2
+	`, userID, badgeCodeGeoDuelsTeam); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `
 		delete from user_badges
 		where user_id = $1
-			and badge_id = 'geoduels-team'
-	`, userID)
+			and badge_code = $2
+	`, userID, badgeCodeGeoDuelsTeam)
 	return err
 }
 
@@ -2824,17 +2903,28 @@ func (s *pgStore) GetFinalMatchSnapshot(matchID string) ([]byte, bool, error) {
 	defer cancel()
 	row := s.pool.QueryRow(ctx, `
 		select snapshot_json::text
-		from runtime_snapshots
+		from match_history
 		where match_id = $1
-		order by seq desc
 		limit 1
 	`, matchID)
 	var raw string
 	if err := row.Scan(&raw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, nil
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, err
 		}
-		return nil, false, err
+		row = s.pool.QueryRow(ctx, `
+			select snapshot_json::text
+			from runtime_snapshots
+			where match_id = $1
+			order by seq desc
+			limit 1
+		`, matchID)
+		if err := row.Scan(&raw); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, false, nil
+			}
+			return nil, false, err
+		}
 	}
 	return []byte(raw), true, nil
 }
@@ -4642,28 +4732,46 @@ func (s *pgStore) RecordRuntimeMatch(matchID, state string, ownerEpoch int64, te
 	return err
 }
 
-func (s *pgStore) RecordMatchChatMessage(message MatchChatMessage) error {
+func (s *pgStore) RecordChatMessage(conversationID, scopeKind, scopeID string, message ChatMessage) error {
+	conversationID = strings.TrimSpace(conversationID)
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	if conversationID == "" || scopeKind == "" || scopeID == "" {
+		return errors.New("conversation scope required")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	body := nullable(message.Body)
-	emote := nullable(string(message.Emote))
 	createdAt := message.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+	return s.recordChatMessage(ctx, conversationID, scopeKind, scopeID, message, createdAt)
+}
+
+func (s *pgStore) recordChatMessage(ctx context.Context, conversationID, scopeKind, scopeID string, message ChatMessage, createdAt time.Time) error {
+	body := nullable(message.Body)
+	emote := nullable(string(message.Emote))
 	_, err := s.pool.Exec(ctx, `
-		insert into match_chat_messages (
-			id, match_id, sender_user_id, sender_display_name, kind, body, emote, created_at
-		)
-		values ($1, $2, $3, $4, $5, $6, $7, $8)
+		insert into chat_conversations (id, scope_kind, scope_id)
+		values ($1, $2, $3)
 		on conflict (id) do nothing
-	`, message.ID, message.MatchID, message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, createdAt)
+	`, conversationID, scopeKind, scopeID)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		insert into chat_messages (
+			id, conversation_id, match_id, sender_user_id, sender_display_name, kind, body, emote, created_at
+		)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		on conflict (id) do nothing
+	`, message.ID, conversationID, nullable(message.MatchID), message.SenderUserID, message.SenderDisplayName, string(message.Kind), body, emote, createdAt)
 	return err
 }
 
-func (s *pgStore) ListMatchChatMessages(matchID string, limit int) ([]MatchChatMessage, error) {
-	matchID = strings.TrimSpace(matchID)
-	if matchID == "" {
+func (s *pgStore) ListChatMessages(conversationID string, limit int) ([]ChatMessage, error) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
 		return nil, nil
 	}
 	if limit <= 0 || limit > 500 {
@@ -4672,22 +4780,22 @@ func (s *pgStore) ListMatchChatMessages(matchID string, limit int) ([]MatchChatM
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		select id, match_id, sender_user_id, sender_display_name, kind, coalesce(body, ''), coalesce(emote, ''), created_at
-		from match_chat_messages
-		where match_id = $1
+		select id, conversation_id, coalesce(match_id, ''), sender_user_id, sender_display_name, kind, coalesce(body, ''), coalesce(emote, ''), created_at
+		from chat_messages
+		where conversation_id = $1
 		order by created_at asc
 		limit $2
-	`, matchID, limit)
+	`, conversationID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	messages := []MatchChatMessage{}
+	messages := []ChatMessage{}
 	for rows.Next() {
-		var message MatchChatMessage
+		var message ChatMessage
 		var kind string
 		var emote string
-		if err := rows.Scan(&message.ID, &message.MatchID, &message.SenderUserID, &message.SenderDisplayName, &kind, &message.Body, &emote, &message.CreatedAt); err != nil {
+		if err := rows.Scan(&message.ID, &message.ConversationID, &message.MatchID, &message.SenderUserID, &message.SenderDisplayName, &kind, &message.Body, &emote, &message.CreatedAt); err != nil {
 			return nil, err
 		}
 		message.Kind = contracts.ChatMessageKind(kind)

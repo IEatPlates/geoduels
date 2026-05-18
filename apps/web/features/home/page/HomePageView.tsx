@@ -1,5 +1,6 @@
 import dynamic from 'next/dynamic';
 import type { HomeModel } from '../model/types';
+import HomePageChatDock from './HomePageChatDock';
 import HomePageLobby from './HomePageLobby';
 import HomePageOverlays from './HomePageOverlays';
 
@@ -23,6 +24,7 @@ export default function HomePageView({ model }: HomePageViewProps) {
     <main className="relative min-h-screen overflow-hidden text-ink">
       <HomePageOverlays auth={model.view.auth} overlays={model.view.overlays} actions={model.actions} />
       <HomePageLobby auth={model.view.auth} lobby={model.view.lobby} meta={model.view.meta} actions={model.actions} />
+      <HomePageChatDock chat={model.view.chat} actions={model.actions} />
       {showGame ? (
         <HomePageGame
           game={model.view.game}
