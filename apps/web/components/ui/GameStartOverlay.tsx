@@ -51,7 +51,7 @@ export default function GameStartOverlay({
       {/* Header Info */}
       <div className="absolute top-12 flex flex-col items-center">
         <img
-          src="/icon.png"
+          src="/icon.v1.png"
           alt="Trophy"
           className="h-16 w-16 md:h-20 md:w-20 drop-shadow-lg mb-2"
         />

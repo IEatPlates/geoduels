@@ -27,10 +27,18 @@ const nextConfig = {
         ]
       },
       {
-        // Avoid storing HTML-like responses so clients always fetch the latest
-        // document after a deploy, while keeping Next's fingerprinted static
-        // assets on their default long cache.
-        source: "/((?!_next/static|_next/image|favicon.ico).*)",
+        source: "/:path*.v:version(\\d+).:ext(jpg|jpeg|png|webp|avif|svg|ico|ogg|mp3|woff|woff2)",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        // Avoid storing route documents so clients always fetch the latest
+        // document after a deploy, while keeping static assets cacheable.
+        source: "/((?!_next/static|_next/image|.*\\..*).*)",
         headers: [
           {
             key: "Cache-Control",

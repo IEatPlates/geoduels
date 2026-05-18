@@ -27,9 +27,9 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     <>
       <Head>
-        <link rel="icon" href="/icon.png" type="image/png" />
-        <link rel="shortcut icon" href="/icon.png" type="image/png" />
-        <link rel="apple-touch-icon" href="/icon.png" />
+        <link rel="icon" href="/icon.v1.png" type="image/png" />
+        <link rel="shortcut icon" href="/icon.v1.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/icon.v1.png" />
       </Head>
       <div className={montserrat.variable}>
         <QueryClientProvider client={queryClient}>

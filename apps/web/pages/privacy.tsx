@@ -101,7 +101,7 @@ export default function PrivacyPage() {
             Back to GeoDuels
           </Link>
           <img
-            src="/logo-dark.png"
+            src="/logo-dark.v1.png"
             alt="GeoDuels"
             width={120}
             height={32}

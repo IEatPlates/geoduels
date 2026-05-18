@@ -40,7 +40,7 @@ export default function QueueCard({ connected, accessToken, status, joinQueue, c
     <section className="relative w-full max-w-[540px] overflow-hidden rounded-[34px] border border-emerald-200/28 bg-[#21453d]/40 p-6 text-ink shadow-[0_32px_80px_rgba(0,0,0,0.44)] backdrop-blur-xl md:p-7">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(145deg,rgba(90,190,152,0.3)_0%,rgba(26,56,54,0.38)_40%,rgba(8,18,17,0.66)_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(133,247,211,0.24),transparent_45%)]" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[56%] bg-[linear-gradient(180deg,rgba(8,19,18,0.1)_0%,rgba(8,19,18,0.72)_100%),url('/mountains.svg')] bg-cover bg-center opacity-90" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[56%] bg-[linear-gradient(180deg,rgba(8,19,18,0.1)_0%,rgba(8,19,18,0.72)_100%),url('/mountains.v1.svg')] bg-cover bg-center opacity-90" />
 
       <div className="relative z-10">
         <span className="text-[12px] font-semibold uppercase tracking-[0.26em] text-emerald-100/72">Ranked</span>

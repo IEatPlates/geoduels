@@ -302,7 +302,7 @@ export default function RoundResultOverlay({
           >
             <div className="flex flex-col items-center">
               <div className="mb-1">
-                <img src="/icon.png" alt="Trophy" className="h-8 w-8 drop-shadow-lg md:h-10 md:w-10" />
+                <img src="/icon.v1.png" alt="Trophy" className="h-8 w-8 drop-shadow-lg md:h-10 md:w-10" />
               </div>
               <span className="font-hud whitespace-nowrap text-base italic text-white drop-shadow-md md:text-xl">
                 Round {roundNumber}

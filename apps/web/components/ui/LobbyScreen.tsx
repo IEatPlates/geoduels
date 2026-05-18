@@ -1857,7 +1857,7 @@ export default function LobbyScreen({
           className="absolute inset-0"
           style={{
             backgroundImage:
-              "linear-gradient(rgba(18, 56, 41, 0.4), rgba(0, 0, 0, 0.9)), url('/bg2.jpg')",
+              "linear-gradient(rgba(18, 56, 41, 0.4), rgba(0, 0, 0, 0.9)), url('/bg2.v1.jpg')",
             backgroundPosition: "center",
             backgroundRepeat: "no-repeat",
             backgroundSize: "cover",
@@ -1903,7 +1903,7 @@ export default function LobbyScreen({
           <div className="flex min-w-0 items-center justify-center">
             <Link href="/" aria-label="GeoDuels home" className="inline-flex">
               <img
-                src="/logo-dark.png"
+                src="/logo-dark.v1.png"
                 alt="GeoDuels"
                 width={140}
                 height={38}
@@ -2010,7 +2010,7 @@ export default function LobbyScreen({
                     className={`absolute inset-x-0 bottom-0 pointer-events-none h-full transition-opacity duration-500 ${isQueueing ? "opacity-[0.24]" : "opacity-[0.32]"}`}
                   >
                     <img
-                      src="/mountains.svg"
+                      src="/mountains.v1.svg"
                       alt=""
                       aria-hidden="true"
                       className="absolute inset-0 h-full w-full object-cover object-center"
@@ -2111,7 +2111,7 @@ export default function LobbyScreen({
                   {/* Decorative background mountains */}
                   <div className="absolute inset-x-0 bottom-0 h-full pointer-events-none opacity-[0.25] transition-opacity duration-500">
                     <img
-                      src="/mountains.svg"
+                      src="/mountains.v1.svg"
                       alt=""
                       aria-hidden="true"
                       className="absolute inset-0 h-full w-full object-cover object-center opacity-50"

@@ -33,43 +33,43 @@ export interface SfxController {
 
 export const sfxRegistry: SfxRegistry = {
   chat: {
-    sources: [{ src: '/sfx/chat.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/chat.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.75
   },
   select: {
-    sources: [{ src: '/sfx/select.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/select.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.75
   },
   'duel-game-start': {
-    sources: [{ src: '/sfx/duel-game-start.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-game-start.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.85
   },
   'duel-round-guess': {
-    sources: [{ src: '/sfx/duel-round-guess.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-guess.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.8
   },
   'duel-round-countdown': {
-    sources: [{ src: '/sfx/duel-round-countdown.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-countdown.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.75
   },
   'duel-round-result-countdown': {
-    sources: [{ src: '/sfx/duel-round-result-countdown.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-result-countdown.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.75
   },
   'duel-round-result-enter': {
-    sources: [{ src: '/sfx/duel-round-result-enter.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-result-enter.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.85
   },
   'duel-round-result-score-reveal': {
-    sources: [{ src: '/sfx/duel-round-result-score-reveal.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-result-score-reveal.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.9
   },
   'duel-round-result-hp-hit': {
-    sources: [{ src: '/sfx/duel-round-result-hp-hit.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-result-hp-hit.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.55
   },
   'duel-round-result-exit': {
-    sources: [{ src: '/sfx/duel-round-result-exit.ogg', type: 'audio/ogg; codecs=vorbis' }],
+    sources: [{ src: '/sfx/duel-round-result-exit.v1.ogg', type: 'audio/ogg; codecs=vorbis' }],
     volume: 0.8
   }
 };
