@@ -53,12 +53,14 @@ func (q *matchCoordinator) createLobby(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := q.persist.CreateLobby(userID, mode, req.MapScope, defaultLobbyTTL)
 	if err != nil {
+		observability.Log("error", "create lobby failed", map[string]any{"userId": userID, "mode": string(mode), "error": err.Error()})
 		http.Error(w, "lobby unavailable", http.StatusInternalServerError)
 		return
 	}
 	if req.Config.Ruleset != "" || req.Config.RoundTimerMode != "" || req.Config.RoundTimeLimitMS > 0 || req.Config.PressureTimeLimitMS > 0 {
 		cfg, err := q.lobbySettings.Save(r.Context(), snap.ID, req.Config)
 		if err != nil {
+			observability.Log("error", "create lobby settings save failed", map[string]any{"userId": userID, "lobbyId": snap.ID, "error": err.Error()})
 			http.Error(w, "lobby unavailable", http.StatusInternalServerError)
 			return
 		}

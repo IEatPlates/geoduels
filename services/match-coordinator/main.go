@@ -322,9 +322,14 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
+		if q.draining.Load() {
+			q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "DRAINING", "message": "Queue server is restarting. Please re-queue."})
+			return
+		}
 		if found == nil {
 			found, err = q.store.Poll(queuePool, selectedRulesets, userID)
 			if err != nil {
+				observability.Log("warn", "queue poll failed", map[string]any{"userId": userID, "pool": string(queuePool), "rulesets": selectedRulesets, "error": err.Error()})
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_POLL_FAILED", "message": "queue poll failed"})
 				return
 			}
@@ -358,6 +363,7 @@ func (q *matchCoordinator) queue(w http.ResponseWriter, r *http.Request) {
 			q.touchPresence(userID)
 			status, err := q.store.Heartbeat(queuePool, selectedRulesets, userID)
 			if err != nil {
+				observability.Log("warn", "queue heartbeat failed", map[string]any{"userId": userID, "pool": string(queuePool), "rulesets": selectedRulesets, "error": err.Error()})
 				q.writeQueueMessage(conn, &writeMu, "queue_error", map[string]string{"code": "QUEUE_HEARTBEAT_FAILED", "message": "queue heartbeat failed"})
 				return
 			}

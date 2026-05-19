@@ -144,7 +144,7 @@ export async function streamQueue(
         settleResolve();
         return;
       }
-      settleReject(new Error('Queue connection closed'));
+      settleReject(new Error('Search cancelled'));
     };
 
     ws.onmessage = (evt) => {
