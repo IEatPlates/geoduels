@@ -194,8 +194,8 @@ describe('LobbyScreen', () => {
       }
     });
 
-    expect(screen.getByText('You · in lobby')).toBeInTheDocument();
-    expect(screen.getByText('not in lobby')).toBeInTheDocument();
+    expect(screen.getByText('You · Online')).toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start Duel' })).toBeDisabled();
   });
 

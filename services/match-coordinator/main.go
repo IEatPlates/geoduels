@@ -111,6 +111,7 @@ func main() {
 	r.HandleFunc("/chat/ws", q.chatWS).Methods(http.MethodGet)
 	r.HandleFunc("/lobbies", q.createLobby).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/ws", q.lobbyWS).Methods(http.MethodGet)
+	r.HandleFunc("/lobbies/{id}/presence", q.lobbyPresence).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/start", q.startLobby).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/leave", q.leaveLobby).Methods(http.MethodPost)
 	r.HandleFunc("/lobbies/{id}/kick", q.kickLobbyMember).Methods(http.MethodPost)

@@ -18,6 +18,7 @@ export type LobbyMember = {
   role: string;
   ready?: boolean;
   connected?: boolean;
+  presenceStatus?: "online" | "away" | "offline";
 };
 
 export type LobbySnapshot = {
@@ -130,11 +131,21 @@ export function applyLobbyPatch(lobby: LobbySnapshot | null, patch: LobbyPatch):
   return next;
 }
 
-export async function fetchLobby(config: RuntimeConfig, code: string): Promise<LobbySnapshot | null> {
-  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(code)}`);
+export async function fetchLobby(config: RuntimeConfig, code: string, signal?: AbortSignal): Promise<LobbySnapshot | null> {
+  const target = `${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(code)}`;
+  const resp = signal ? await fetch(target, { signal }) : await fetch(target);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error("Lobby unavailable");
   return resp.json();
+}
+
+export async function touchLobbyPresence(config: RuntimeConfig, lobbyId: string, accessToken: string, signal?: AbortSignal): Promise<void> {
+  const resp = await fetch(`${lobbyHTTPBase(config)}/lobbies/${encodeURIComponent(lobbyId)}/presence`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    signal,
+  });
+  if (!resp.ok) throw new Error("Lobby presence unavailable");
 }
 
 export async function joinLobby(config: RuntimeConfig, code: string, accessToken: string): Promise<LobbySnapshot> {

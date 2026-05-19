@@ -56,9 +56,12 @@ function buildHistoryOverlay(
   const resultPlayerNames: Record<string, string | undefined> = {};
   const resultPlayerAvatars: Record<string, string | undefined> = {};
   const resultPlayerFallbacks: Record<string, string | undefined> = {};
+  const resultPlayerBorderColors: Record<string, string | undefined> = {};
   Object.entries(snapshot.players || {}).forEach(([id, player]) => {
     resultPlayerNames[id] = player.displayName || player.userId;
     resultPlayerAvatars[id] = player.avatarUrl;
+    resultPlayerBorderColors[id] =
+      mode === "team_duel" ? (player.teamId === "b" ? "#2563eb" : "#dc2626") : undefined;
     resultPlayerFallbacks[id] = (player.displayName || player.userId || "P")
       .slice(0, 1)
       .toUpperCase();
@@ -103,6 +106,7 @@ function buildHistoryOverlay(
     resultPlayerNames,
     resultPlayerAvatars,
     resultPlayerFallbacks,
+    resultPlayerBorderColors,
   };
 }
 
@@ -261,6 +265,7 @@ export default function MatchPage() {
               resultPlayerNames={historyOverlay.resultPlayerNames}
               resultPlayerAvatars={historyOverlay.resultPlayerAvatars}
               resultPlayerFallbacks={historyOverlay.resultPlayerFallbacks}
+              resultPlayerBorderColors={historyOverlay.resultPlayerBorderColors}
               onReportPlayer={handleHistoryReport}
               onPlayAgain={
                 historyOverlay.mode === "singleplayer"

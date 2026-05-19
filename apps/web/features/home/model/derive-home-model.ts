@@ -286,10 +286,12 @@ export function deriveHomeModel({
   );
   const resultPlayerAvatars: Record<string, string | undefined> = {};
   const resultPlayerFallbacks: Record<string, string | undefined> = {};
+  const resultPlayerBorderColors: Record<string, string | undefined> = {};
   const resultPlayerNames: Record<string, string | undefined> = {};
   Object.entries(snapshot?.players || {}).forEach(([id, player]) => {
     resultPlayerNames[id] = player.displayName || player.userId;
     resultPlayerAvatars[id] = player.avatarUrl;
+    resultPlayerBorderColors[id] = isTeamDuel ? teamColor(player.teamId || "a") : undefined;
     resultPlayerFallbacks[id] = avatarFallback(
       player.displayName || player.userId,
       "P",
@@ -541,6 +543,7 @@ export function deriveHomeModel({
       participantsById,
       selfParticipant,
       opponentParticipant,
+      resultPlayerBorderColors,
       selfName: displaySelfName,
       selfAvatarUrl,
       selfFallback,
@@ -635,6 +638,7 @@ export function deriveHomeModel({
               resultPlayerNames,
               resultPlayerAvatars,
               resultPlayerFallbacks,
+              resultPlayerBorderColors,
               participantsById,
               selfParticipant,
               opponentParticipant,

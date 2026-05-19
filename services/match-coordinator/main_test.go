@@ -585,6 +585,42 @@ func TestLobbyPatchIncludesPresenceChange(t *testing.T) {
 	}
 }
 
+func TestApplyLobbyPresenceComputesStatuses(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	q := &matchCoordinator{redis: rdb}
+	now := time.Now().UnixMilli()
+	if err := rdb.HSet(context.Background(), lobbyPresenceKey("lob-1"), map[string]any{
+		"u1":        now,
+		"u2":        now - 30_000,
+		"u3|conn-1": now - 70_000,
+	}).Err(); err != nil {
+		t.Fatalf("set presence: %v", err)
+	}
+
+	snap := contracts.LobbySnapshot{
+		ID: "lob-1",
+		Members: []contracts.LobbyMember{
+			{UserID: "u1", DisplayName: "One"},
+			{UserID: "u2", DisplayName: "Two"},
+			{UserID: "u3", DisplayName: "Three"},
+		},
+	}
+	q.applyLobbyPresence(&snap)
+
+	if !snap.Members[0].Connected || snap.Members[0].PresenceStatus != contracts.LobbyPresenceOnline {
+		t.Fatalf("u1 presence = %+v", snap.Members[0])
+	}
+	if snap.Members[1].Connected || snap.Members[1].PresenceStatus != contracts.LobbyPresenceAway {
+		t.Fatalf("u2 presence = %+v", snap.Members[1])
+	}
+	if snap.Members[2].Connected || snap.Members[2].PresenceStatus != contracts.LobbyPresenceOffline {
+		t.Fatalf("u3 presence = %+v", snap.Members[2])
+	}
+}
+
 var _ matchstore.Store = (*heartbeatTestStore)(nil)
 
 func queueWSURL(serverURL string) string {

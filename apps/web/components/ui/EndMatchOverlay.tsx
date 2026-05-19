@@ -41,6 +41,7 @@ type Props = {
   resultPlayerNames: Record<string, string | undefined>;
   resultPlayerAvatars: Record<string, string | undefined>;
   resultPlayerFallbacks: Record<string, string | undefined>;
+  resultPlayerBorderColors?: Record<string, string | undefined>;
   participantsById?: Record<string, ParticipantIdentityView>;
   selfParticipant?: ParticipantIdentityView;
   opponentParticipant?: ParticipantIdentityView;
@@ -87,6 +88,7 @@ export default function EndMatchOverlay({
   resultPlayerNames,
   resultPlayerAvatars,
   resultPlayerFallbacks,
+  resultPlayerBorderColors,
   participantsById = {},
   selfParticipant,
   opponentParticipant,
@@ -348,6 +350,7 @@ export default function EndMatchOverlay({
             interactiveInResult
             resultPlayerAvatars={resultPlayerAvatars}
             resultPlayerFallbacks={resultPlayerFallbacks}
+            resultPlayerBorderColors={resultPlayerBorderColors}
           />
         ) : (
           <div className="flex h-full items-center justify-center bg-black/40 text-center text-sm font-semibold text-[#a9bfd4]">

@@ -69,6 +69,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
         resultPlayerNames: { self: "Self", opp: "Opponent" },
         resultPlayerAvatars: {},
         resultPlayerFallbacks: {},
+        resultPlayerBorderColors: {},
         participantsById: {
           self: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
           opp: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },
@@ -167,6 +168,7 @@ function createModel(overrides?: Partial<HomeModel["view"]>): HomeModel {
           resultPlayerNames: { self: "Self", opp: "Opponent" },
           resultPlayerAvatars: { self: "", opp: "" },
           resultPlayerFallbacks: { self: "S", opp: "O" },
+          resultPlayerBorderColors: {},
           participantsById: {
             self: { kind: "player", id: "self", name: "Self", avatarFallback: "S" },
             opp: { kind: "player", id: "opp", name: "Opponent", avatarFallback: "O" },

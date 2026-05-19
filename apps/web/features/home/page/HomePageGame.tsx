@@ -37,6 +37,7 @@ export default function HomePageGame({
         interactiveInResult
         resultPlayerAvatars={game.resultPlayerAvatars}
         resultPlayerFallbacks={game.resultPlayerFallbacks}
+        resultPlayerBorderColors={game.resultPlayerBorderColors}
       />
     </div>
   ) : null;

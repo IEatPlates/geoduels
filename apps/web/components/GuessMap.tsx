@@ -27,6 +27,7 @@ type Props = {
   guessAvatarFallback?: string;
   resultPlayerAvatars?: Record<string, string | undefined>;
   resultPlayerFallbacks?: Record<string, string | undefined>;
+  resultPlayerBorderColors?: Record<string, string | undefined>;
 };
 
 function ClickCapture({ onGuess }: { onGuess: (lat: number, lng: number) => void }) {
@@ -200,13 +201,15 @@ type WrappedResultLayerProps = {
   actualLocationIcon: L.DivIcon;
   resultPlayerAvatars?: Record<string, string | undefined>;
   resultPlayerFallbacks?: Record<string, string | undefined>;
+  resultPlayerBorderColors?: Record<string, string | undefined>;
 };
 
 function WrappedResultLayer({
   result,
   actualLocationIcon,
   resultPlayerAvatars,
-  resultPlayerFallbacks
+  resultPlayerFallbacks,
+  resultPlayerBorderColors
 }: WrappedResultLayerProps) {
   const map = useMap();
   const [viewportVersion, setViewportVersion] = useState(0);
@@ -269,6 +272,7 @@ function WrappedResultLayer({
           icon={createAvatarMarkerIcon({
             avatarUrl: resultPlayerAvatars?.[id],
             fallback: resultPlayerFallbacks?.[id],
+            borderColor: resultPlayerBorderColors?.[id],
             size: 38
           })}
         />
@@ -281,12 +285,14 @@ type WrappedResultsLayerProps = {
   results: RoundResult[];
   resultPlayerAvatars?: Record<string, string | undefined>;
   resultPlayerFallbacks?: Record<string, string | undefined>;
+  resultPlayerBorderColors?: Record<string, string | undefined>;
 };
 
 function WrappedResultsLayer({
   results,
   resultPlayerAvatars,
-  resultPlayerFallbacks
+  resultPlayerFallbacks,
+  resultPlayerBorderColors
 }: WrappedResultsLayerProps) {
   const map = useMap();
   const [viewportVersion, setViewportVersion] = useState(0);
@@ -360,6 +366,7 @@ function WrappedResultsLayer({
             icon={createAvatarMarkerIcon({
               avatarUrl: resultPlayerAvatars?.[player.id],
               fallback: resultPlayerFallbacks?.[player.id],
+              borderColor: resultPlayerBorderColors?.[player.id],
               size: 30
             })}
           />
@@ -439,25 +446,35 @@ function openGoogleMapsLocation(lat: number, lng: number, event?: L.LeafletMouse
 function createAvatarMarkerIcon({
   avatarUrl,
   fallback,
+  borderColor,
   size
 }: {
   avatarUrl?: string;
   fallback?: string;
+  borderColor?: string;
   size: number;
 }) {
   const normalizedFallback = (fallback || 'P').slice(0, 1).toUpperCase();
   const pinClass = avatarUrl ? 'guessAvatarPin' : 'guessAvatarPin fallback';
   const safeUrl = avatarUrl ? avatarUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;') : '';
+  const safeBorderColor = normalizePinBorderColor(borderColor);
+  const borderStyle = safeBorderColor ? `;--pin-border:${safeBorderColor}` : '';
   const avatarHtml = avatarUrl
     ? `<img src="${safeUrl}" alt="Player avatar" />`
     : normalizedFallback;
 
   return L.divIcon({
     className: 'guess-avatar-marker',
-    html: `<div class="${pinClass}" style="--pin-size:${size}px">${avatarHtml}</div>`,
+    html: `<div class="${pinClass}" style="--pin-size:${size}px${borderStyle}">${avatarHtml}</div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2]
   });
+}
+
+function normalizePinBorderColor(color?: string) {
+  if (!color) return '';
+  const trimmed = color.trim();
+  return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(trimmed) ? trimmed : '';
 }
 
 function createActualLocationIcon(roundNumber?: number) {
@@ -484,7 +501,8 @@ export default function GuessMap({
   guessAvatarUrl,
   guessAvatarFallback,
   resultPlayerAvatars,
-  resultPlayerFallbacks
+  resultPlayerFallbacks,
+  resultPlayerBorderColors
 }: Props) {
   const center = useMemo<[number, number]>(() => [0, 0], []);
   const interactive = mode === 'guess' || (mode === 'result' && interactiveInResult);
@@ -534,6 +552,7 @@ export default function GuessMap({
           actualLocationIcon={actualLocationIcon}
           resultPlayerAvatars={resultPlayerAvatars}
           resultPlayerFallbacks={resultPlayerFallbacks}
+          resultPlayerBorderColors={resultPlayerBorderColors}
         />
       ) : null}
       {mode === 'result' && !result && results?.length ? (
@@ -541,6 +560,7 @@ export default function GuessMap({
           results={results}
           resultPlayerAvatars={resultPlayerAvatars}
           resultPlayerFallbacks={resultPlayerFallbacks}
+          resultPlayerBorderColors={resultPlayerBorderColors}
         />
       ) : null}
     </MapContainer>

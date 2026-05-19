@@ -90,6 +90,7 @@ export default function HomePageOverlays({
           resultPlayerNames={overlays.endMatch.resultPlayerNames}
           resultPlayerAvatars={overlays.endMatch.resultPlayerAvatars}
           resultPlayerFallbacks={overlays.endMatch.resultPlayerFallbacks}
+          resultPlayerBorderColors={overlays.endMatch.resultPlayerBorderColors}
           participantsById={overlays.endMatch.participantsById}
           selfParticipant={overlays.endMatch.selfParticipant}
           opponentParticipant={overlays.endMatch.opponentParticipant}

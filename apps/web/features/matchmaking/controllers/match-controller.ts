@@ -54,6 +54,9 @@ export class MatchController extends ObservableStore<MatchState> {
   private lastSocketOpenedAt = 0;
   private lastServerSeenAt = 0;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private firstSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
+  private awaitingFirstSnapshotMatchId = '';
+  private firstSnapshotRecoverAttempts = 0;
   private destroyed = false;
   private started = false;
 
@@ -74,7 +77,7 @@ export class MatchController extends ObservableStore<MatchState> {
         if (expected) {
           return;
         }
-        if (this.state.snapshot) {
+        if (this.state.snapshot || this.state.activeMatchId) {
           this.patchState({ connectionIssue: this.config.gameConnectionErrorMessage });
           this.dispatchMatchmaking({ type: 'ws_closed' });
           const currentSession = this.activeSession;
@@ -92,6 +95,11 @@ export class MatchController extends ObservableStore<MatchState> {
       onSnapshot: (snapshot) => {
         if (this.state.snapshot?.matchId === snapshot.matchId && snapshot.eventSequence < this.state.snapshot.eventSequence) {
           return;
+        }
+        if (snapshot.matchId && snapshot.matchId === this.awaitingFirstSnapshotMatchId) {
+          this.clearFirstSnapshotTimeout();
+          this.awaitingFirstSnapshotMatchId = '';
+          this.firstSnapshotRecoverAttempts = 0;
         }
         this.noteServerActivity();
         this.patchState({
@@ -121,6 +129,7 @@ export class MatchController extends ObservableStore<MatchState> {
     this.recoverAbort?.abort();
     this.clearRecoverTracking();
     this.queueAbort?.abort();
+    this.clearFirstSnapshotTimeout();
     this.socketClient.close();
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = null;
@@ -209,6 +218,7 @@ export class MatchController extends ObservableStore<MatchState> {
     this.recoverAbort?.abort();
     this.clearRecoverTracking();
     this.queueAbort?.abort();
+    this.clearFirstSnapshotTimeout();
     this.socketClient.close();
     this.activeSession = null;
     this.lastSocketOpenedAt = 0;
@@ -333,6 +343,36 @@ export class MatchController extends ObservableStore<MatchState> {
       sourceLobbyInviteCode: source?.sourceLobbyInviteCode || ''
     });
     this.socketClient.connect(session, node, wsPath, ticket);
+    this.startFirstSnapshotTimeout(matchId || this.state.activeMatchId);
+  }
+
+  private clearFirstSnapshotTimeout() {
+    if (this.firstSnapshotTimeout) clearTimeout(this.firstSnapshotTimeout);
+    this.firstSnapshotTimeout = null;
+  }
+
+  private startFirstSnapshotTimeout(matchId?: string) {
+    const targetMatchId = matchId || '';
+    if (!targetMatchId) return;
+    this.clearFirstSnapshotTimeout();
+    this.awaitingFirstSnapshotMatchId = targetMatchId;
+    this.firstSnapshotTimeout = setTimeout(() => {
+      if (this.destroyed || this.state.snapshot?.matchId === targetMatchId) return;
+      const session = this.activeSession || this.sessionController.getSessionSnapshot();
+      this.socketClient.close();
+      this.patchState({
+        connected: false,
+        connectionIssue: 'Still trying to join the live match...'
+      });
+      if (!session || this.firstSnapshotRecoverAttempts >= 3) {
+        this.dispatchMatchmaking({ type: 'set_status', status: 'abandoned', bumpIntent: false });
+        this.patchState({ connectionIssue: 'Could not join the live match. Please retry.' });
+        return;
+      }
+      this.firstSnapshotRecoverAttempts += 1;
+      this.dispatchMatchmaking({ type: 'ws_closed' });
+      void this.startRecover(session);
+    }, 10000);
   }
 
   resumeResolvedMatch = async (

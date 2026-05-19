@@ -87,6 +87,7 @@ export type HomeGameView = {
   resultOverlay?: Omit<RoundResultOverlayProps, "mapNode">;
   resultPlayerAvatars: Record<string, string | undefined>;
   resultPlayerFallbacks: Record<string, string | undefined>;
+  resultPlayerBorderColors: Record<string, string | undefined>;
   resultPlayerNames: Record<string, string | undefined>;
   participantsById: Record<string, ParticipantIdentityView>;
   selfParticipant: ParticipantIdentityView;
@@ -169,6 +170,7 @@ export type HomeOverlaysView = {
         resultPlayerNames: Record<string, string | undefined>;
         resultPlayerAvatars: Record<string, string | undefined>;
         resultPlayerFallbacks: Record<string, string | undefined>;
+        resultPlayerBorderColors: Record<string, string | undefined>;
         participantsById: Record<string, ParticipantIdentityView>;
         selfParticipant: ParticipantIdentityView;
         opponentParticipant?: ParticipantIdentityView;

@@ -867,7 +867,7 @@ export default function LobbyScreen({
   const saveLobbyMode = (mode: PartyMode) => {
     void updatePrivateLobbySettings(lobbyConfig, mode);
   };
-  const missingLobbyMembers = lobbyMembers.filter((member) => !member.connected);
+  const missingLobbyMembers = lobbyMembers.filter((member) => (member.presenceStatus || (member.connected ? "online" : "offline")) !== "online");
   const teamACount = lobbyMembers.filter((member) => (member.teamId || "a") === "a").length;
   const teamBCount = lobbyMembers.filter((member) => member.teamId === "b").length;
   const canStartPrivateLobby =
@@ -1071,13 +1071,17 @@ export default function LobbyScreen({
                 {lobbyMembers.map((member) => {
                   const isLeader = member.userId === privateLobby.snapshot?.ownerUserId;
                   const isSelf = member.userId === userId;
-                  const lobbyStatus = member.connected
-                    ? "in lobby"
-                    : "not in lobby";
+                  const presenceStatus = member.presenceStatus || (member.connected ? "online" : "offline");
+                  const lobbyStatus =
+                    presenceStatus === "online"
+                      ? "Online"
+                      : presenceStatus === "away"
+                        ? "Reconnecting"
+                        : "Offline";
                   return (
                     <div
                       key={member.userId}
-                      className={`flex min-h-[72px] flex-col gap-3 rounded-[16px] border border-white/10 bg-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${!member.connected ? 'opacity-50' : ''}`}
+                      className={`flex min-h-[72px] flex-col gap-3 rounded-[16px] border border-white/10 bg-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${presenceStatus === "offline" ? 'opacity-50' : ''}`}
                     >
 	                      <div className="min-w-0">
 	                        <div className="flex items-center gap-2">
@@ -1092,7 +1096,7 @@ export default function LobbyScreen({
 	                          ) : null}
 	                        </div>
 	                        <p className="mt-1 text-[12px] font-semibold text-[#a9bfd4]">
-	                          {isSelf ? `You · ${lobbyStatus}` : lobbyStatus}
+		                          {isSelf ? `You · ${lobbyStatus}` : lobbyStatus}
 	                        </p>
 	                        {lobbyMode === "team_duel" ? (
 	                          <p className="mt-1 text-[12px] font-semibold uppercase tracking-[0.12em]">

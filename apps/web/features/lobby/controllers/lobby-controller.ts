@@ -16,6 +16,7 @@ import {
   leaveLobby as requestLeaveLobby,
   startLobby as requestStartLobby,
   streamLobby,
+  touchLobbyPresence,
   transferLobbyOwner as requestTransferLobbyOwner,
   updateLobbySettings as requestUpdateLobbySettings,
   updateLobbyTeam as requestUpdateLobbyTeam,
@@ -55,22 +56,8 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function mergeLobbySnapshotPreservingPresence(
-  current: LobbySnapshot | null,
-  next: LobbySnapshot,
-): LobbySnapshot {
-  if (!current || current.id !== next.id) return next;
-  const currentMembers = new Map(
-    current.members.map((member) => [member.userId, member]),
-  );
-  return {
-    ...next,
-    members: next.members.map((member) => {
-      const existing = currentMembers.get(member.userId);
-      if (!existing || typeof member.connected === "boolean") return member;
-      return { ...member, connected: existing.connected };
-    }),
-  };
+function normalizeLobbySnapshot(next: LobbySnapshot): LobbySnapshot {
+  return next;
 }
 
 export class LobbyController extends ObservableStore<LobbyRuntimeState> {
@@ -80,6 +67,10 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
   private state: LobbyRuntimeState = initialState;
   private streamAbort: AbortController | null = null;
   private streamSession: AuthSessionSnapshot | null = null;
+  private presenceInterval: number | null = null;
+  private pollInterval: number | null = null;
+  private reconnectTimeout: number | null = null;
+  private reconnectAttempt = 0;
   private handledMatchId = "";
   private connectRequestId = 0;
   private destroyed = false;
@@ -101,10 +92,16 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
 
   destroy() {
     this.destroyed = true;
+    this.stopPresenceLoop();
+    this.stopPollLoop();
+    this.clearReconnectTimer();
     this.abortStream();
   }
 
   reset = () => {
+    this.stopPresenceLoop();
+    this.stopPollLoop();
+    this.clearReconnectTimer();
     this.abortStream();
     this.handledMatchId = "";
     this.patchState(initialState);
@@ -141,10 +138,7 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
       this.patchState({
         lobbyId: snap.id,
         inviteCode: snap.inviteCode,
-        snapshot: mergeLobbySnapshotPreservingPresence(
-          this.state.snapshot,
-          snap,
-        ),
+        snapshot: normalizeLobbySnapshot(snap),
       });
       if (!this.isCurrentUserMember(snap)) {
         this.patchState({ status: "ready", error: "" });
@@ -367,6 +361,7 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
     lobbyId: string,
     options?: { waitForSnapshot?: boolean },
   ) {
+    this.clearReconnectTimer();
     this.abortStream();
     const controller = new AbortController();
     const requestId = ++this.connectRequestId;
@@ -402,6 +397,9 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
         if (requestId !== this.connectRequestId) return;
         if (event.type === "lobby_snapshot") {
           if (readyTimeout) window.clearTimeout(readyTimeout);
+          this.reconnectAttempt = 0;
+          this.stopPollLoop();
+          this.startPresenceLoop();
           this.patchSnapshot(event.lobby, "ready");
           this.handleStartedLobby(event.lobby, controller);
           readyResolve?.();
@@ -412,6 +410,8 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
         if (event.type === "lobby_patch") {
           const next = applyLobbyPatch(this.state.snapshot, event.patch);
           if (next) {
+            this.reconnectAttempt = 0;
+            this.startPresenceLoop();
             this.patchSnapshot(next, "ready");
             this.handleStartedLobby(next, controller);
           }
@@ -440,6 +440,12 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
         if (readyReject) {
           if (readyTimeout) window.clearTimeout(readyTimeout);
           readyReject(new Error("Lobby connection closed"));
+          return;
+        }
+        if (this.state.snapshot && this.state.lobbyId) {
+          this.patchState({ status: "reconnecting" });
+          this.startPollLoop();
+          this.scheduleReconnect();
         }
       })
       .catch((error) => {
@@ -455,6 +461,10 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
             ? error
             : new Error("Lobby connection failed"),
         );
+        if (!readyReject && this.state.snapshot && this.state.lobbyId) {
+          this.startPollLoop();
+          this.scheduleReconnect();
+        }
       });
     return ready;
   }
@@ -465,8 +475,65 @@ export class LobbyController extends ObservableStore<LobbyRuntimeState> {
     this.streamSession = null;
   }
 
+  private startPresenceLoop() {
+    if (this.presenceInterval) return;
+    const tick = () => {
+      const session = this.streamSession || this.sessionController.getSessionSnapshot();
+      const lobbyId = this.state.lobbyId;
+      if (!session?.accessToken || !lobbyId || !this.isCurrentUserMember(this.state.snapshot)) return;
+      void touchLobbyPresence(this.config, lobbyId, session.accessToken).catch(() => {
+        // Presence is advisory; reconnect/polling handles visible recovery.
+      });
+    };
+    tick();
+    this.presenceInterval = window.setInterval(tick, 5000);
+  }
+
+  private stopPresenceLoop() {
+    if (this.presenceInterval) window.clearInterval(this.presenceInterval);
+    this.presenceInterval = null;
+  }
+
+  private startPollLoop() {
+    if (this.pollInterval) return;
+    const poll = () => {
+      const code = this.state.inviteCode || this.state.snapshot?.inviteCode || "";
+      if (!code) return;
+      void fetchLobby(this.config, code)
+        .then((snap) => {
+          if (snap) this.patchSnapshot(snap, this.state.status === "reconnecting" ? "reconnecting" : "ready");
+        })
+        .catch(() => {});
+    };
+    poll();
+    this.pollInterval = window.setInterval(poll, 5000);
+  }
+
+  private stopPollLoop() {
+    if (this.pollInterval) window.clearInterval(this.pollInterval);
+    this.pollInterval = null;
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimeout) window.clearTimeout(this.reconnectTimeout);
+    this.reconnectTimeout = null;
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimeout || !this.state.lobbyId) return;
+    const delays = [1000, 2000, 5000, 10000];
+    const delay = delays[Math.min(this.reconnectAttempt, delays.length - 1)];
+    this.reconnectAttempt += 1;
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.reconnectTimeout = null;
+      void this.ensureStream().catch(() => {
+        this.scheduleReconnect();
+      });
+    }, delay);
+  }
+
   private patchSnapshot(next: LobbySnapshot, status: LobbyRuntimeStatus = "ready") {
-    const snapshot = mergeLobbySnapshotPreservingPresence(this.state.snapshot, next);
+    const snapshot = normalizeLobbySnapshot(next);
     this.patchState({
       status,
       lobbyId: snapshot.id,

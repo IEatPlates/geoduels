@@ -531,18 +531,27 @@ const (
 	LobbyExpired LobbyState = "expired"
 )
 
+type LobbyPresenceStatus string
+
+const (
+	LobbyPresenceOnline  LobbyPresenceStatus = "online"
+	LobbyPresenceAway    LobbyPresenceStatus = "away"
+	LobbyPresenceOffline LobbyPresenceStatus = "offline"
+)
+
 type LobbyMember struct {
-	UserID        string       `json:"userId"`
-	DisplayName   string       `json:"displayName"`
-	AvatarURL     string       `json:"avatarUrl,omitempty"`
-	IsGuest       bool         `json:"isGuest,omitempty"`
-	IsAdmin       bool         `json:"isAdmin,omitempty"`
-	SelectedBadge *PlayerBadge `json:"selectedBadge,omitempty"`
-	TeamID        string       `json:"teamId,omitempty"`
-	Role          string       `json:"role"`
-	Ready         bool         `json:"ready"`
-	Connected     bool         `json:"connected,omitempty"`
-	JoinedAt      time.Time    `json:"joinedAt"`
+	UserID         string              `json:"userId"`
+	DisplayName    string              `json:"displayName"`
+	AvatarURL      string              `json:"avatarUrl,omitempty"`
+	IsGuest        bool                `json:"isGuest,omitempty"`
+	IsAdmin        bool                `json:"isAdmin,omitempty"`
+	SelectedBadge  *PlayerBadge        `json:"selectedBadge,omitempty"`
+	TeamID         string              `json:"teamId,omitempty"`
+	Role           string              `json:"role"`
+	Ready          bool                `json:"ready"`
+	Connected      bool                `json:"connected,omitempty"`
+	PresenceStatus LobbyPresenceStatus `json:"presenceStatus,omitempty"`
+	JoinedAt       time.Time           `json:"joinedAt"`
 }
 
 type LobbySnapshot struct {

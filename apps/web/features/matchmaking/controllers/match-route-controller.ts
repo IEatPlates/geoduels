@@ -58,9 +58,14 @@ export class MatchRouteController extends ObservableStore<MatchRouteState> {
     this.destroyed = false;
     this.unsubscribeMatch = this.matchController.subscribe(() => {
       if (this.state.status !== 'awaiting_first_snapshot') return;
-      const snapshot = this.matchController.getState().snapshot;
+      const matchState = this.matchController.getState();
+      const snapshot = matchState.snapshot;
       if (snapshot?.matchId && snapshot.matchId === this.state.targetMatchId) {
         this.patchState({ status: 'idle' });
+        return;
+      }
+      if (matchState.matchmaking.status === 'abandoned' && matchState.activeMatchId === this.state.targetMatchId) {
+        this.patchState({ status: 'missing' });
       }
     });
   }

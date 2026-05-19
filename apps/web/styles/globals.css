@@ -176,7 +176,7 @@ img {
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 2px solid rgba(255, 255, 255, 0.9);
+  border: 2px solid var(--pin-border, rgba(255, 255, 255, 0.9));
   box-shadow: 0 10px 18px rgba(4, 10, 16, 0.45);
   background: linear-gradient(135deg, #6deec0, #12b178);
   color: #07131c;

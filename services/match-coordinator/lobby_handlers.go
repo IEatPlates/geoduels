@@ -27,8 +27,10 @@ import (
 var lobbyUpgrader = websocket.Upgrader{CheckOrigin: wsOriginAllowed}
 
 const (
-	defaultLobbyTTL  = 2 * time.Hour
-	lobbyPresenceTTL = 90 * time.Second
+	defaultLobbyTTL        = 2 * time.Hour
+	lobbyPresenceOnlineTTL = 15 * time.Second
+	lobbyPresenceAwayTTL   = 60 * time.Second
+	lobbyPresenceTTL       = 90 * time.Second
 )
 
 func (q *matchCoordinator) createLobby(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +66,10 @@ func (q *matchCoordinator) createLobby(w http.ResponseWriter, r *http.Request) {
 	} else {
 		snap = q.lobbySettings.Apply(r.Context(), snap)
 	}
+	if q.touchLobbyPresence(snap.ID, userID, "") {
+		q.publishLobbyChanged(r.Context(), snap.ID)
+	}
+	q.applyLobbyPresence(&snap)
 	q.writeJSON(w, snap)
 }
 
@@ -78,7 +84,9 @@ func (q *matchCoordinator) getLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lobby not found", http.StatusNotFound)
 		return
 	}
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.applyLobbyPresence(&snap)
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) joinLobby(w http.ResponseWriter, r *http.Request) {
@@ -101,8 +109,11 @@ func (q *matchCoordinator) joinLobby(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.touchLobbyPresence(snap.ID, userID, "")
+	q.applyLobbyPresence(&snap)
 	q.publishLobbyChanged(r.Context(), snap.ID)
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) leaveLobby(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +128,9 @@ func (q *matchCoordinator) leaveLobby(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q.publishLobbyChanged(r.Context(), snap.ID)
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.applyLobbyPresence(&snap)
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) kickLobbyMember(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +150,9 @@ func (q *matchCoordinator) kickLobbyMember(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	q.publishLobbyChanged(r.Context(), snap.ID)
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.applyLobbyPresence(&snap)
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) transferLobbyOwner(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +172,9 @@ func (q *matchCoordinator) transferLobbyOwner(w http.ResponseWriter, r *http.Req
 		return
 	}
 	q.publishLobbyChanged(r.Context(), snap.ID)
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.applyLobbyPresence(&snap)
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) updateLobbyTeam(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +194,9 @@ func (q *matchCoordinator) updateLobbyTeam(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	q.publishLobbyChanged(r.Context(), snap.ID)
-	q.writeJSON(w, q.lobbySettings.Apply(r.Context(), snap))
+	snap = q.lobbySettings.Apply(r.Context(), snap)
+	q.applyLobbyPresence(&snap)
+	q.writeJSON(w, snap)
 }
 
 func (q *matchCoordinator) updateLobbySettings(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +248,31 @@ func (q *matchCoordinator) updateLobbySettings(w http.ResponseWriter, r *http.Re
 	}
 	snap.Config = cfg
 	q.publishLobbyChanged(r.Context(), snap.ID)
+	q.applyLobbyPresence(&snap)
 	q.writeJSON(w, snap)
+}
+
+func (q *matchCoordinator) lobbyPresence(w http.ResponseWriter, r *http.Request) {
+	claims, err := q.authenticatedClaims(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	lobbyID := strings.TrimSpace(mux.Vars(r)["id"])
+	snap, ok, err := q.persist.GetLobbyByID(lobbyID)
+	if err != nil {
+		http.Error(w, "lobby unavailable", http.StatusBadGateway)
+		return
+	}
+	if !ok || !lobbyHasMember(snap, claims.Sub) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if q.touchLobbyPresence(lobbyID, claims.Sub, "") {
+		q.publishLobbyChanged(r.Context(), lobbyID)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +301,6 @@ func (q *matchCoordinator) lobbyWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	connID := strconvTimeID()
-	defer q.clearLobbyPresence(lobbyID, claims.Sub, connID)
 	conn.SetReadLimit(1024)
 	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -607,9 +649,10 @@ func (q *matchCoordinator) touchLobbyPresence(lobbyID, userID, connID string) bo
 	if q.redis == nil || strings.TrimSpace(lobbyID) == "" || strings.TrimSpace(userID) == "" {
 		return false
 	}
-	key := "lobby:presence:" + lobbyID
+	key := lobbyPresenceKey(lobbyID)
 	now := time.Now().UnixMilli()
 	field := lobbyPresenceField(userID, connID)
+	previous, _ := q.redis.HGet(context.Background(), key, field).Result()
 	var addedCmd *redis.IntCmd
 	_, err := q.redis.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
 		addedCmd = pipe.HSet(context.Background(), key, field, now)
@@ -620,14 +663,18 @@ func (q *matchCoordinator) touchLobbyPresence(lobbyID, userID, connID string) bo
 		observability.Log("warn", "lobby presence touch failed", map[string]any{"lobbyId": lobbyID, "userId": userID, "error": err.Error()})
 		return false
 	}
-	return addedCmd != nil && addedCmd.Val() > 0
+	if addedCmd != nil && addedCmd.Val() > 0 {
+		return true
+	}
+	prevMS, err := strconv.ParseInt(previous, 10, 64)
+	return err != nil || now-prevMS > lobbyPresenceOnlineTTL.Milliseconds()
 }
 
 func (q *matchCoordinator) clearLobbyPresence(lobbyID, userID, connID string) {
 	if q.redis == nil || strings.TrimSpace(lobbyID) == "" || strings.TrimSpace(userID) == "" {
 		return
 	}
-	removed, err := q.redis.HDel(context.Background(), "lobby:presence:"+lobbyID, lobbyPresenceField(userID, connID)).Result()
+	removed, err := q.redis.HDel(context.Background(), lobbyPresenceKey(lobbyID), lobbyPresenceField(userID, connID)).Result()
 	if err != nil {
 		observability.Log("warn", "lobby presence clear failed", map[string]any{"lobbyId": lobbyID, "userId": userID, "error": err.Error()})
 		return
@@ -648,19 +695,34 @@ func (q *matchCoordinator) applyLobbyPresence(snap *contracts.LobbySnapshot) {
 	if snap == nil || q.redis == nil {
 		return
 	}
-	values, err := q.redis.HGetAll(context.Background(), "lobby:presence:"+snap.ID).Result()
+	values, err := q.redis.HGetAll(context.Background(), lobbyPresenceKey(snap.ID)).Result()
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-lobbyPresenceTTL).UnixMilli()
-	connected := map[string]bool{}
+	now := time.Now().UnixMilli()
+	seen := map[string]int64{}
 	for field, raw := range values {
-		if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms >= cutoff {
-			connected[lobbyPresenceUserID(field)] = true
+		if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && now-ms <= lobbyPresenceTTL.Milliseconds() {
+			userID := lobbyPresenceUserID(field)
+			if userID != "" && ms > seen[userID] {
+				seen[userID] = ms
+			}
 		}
 	}
 	for i := range snap.Members {
-		snap.Members[i].Connected = connected[snap.Members[i].UserID]
+		lastSeen := seen[snap.Members[i].UserID]
+		age := now - lastSeen
+		switch {
+		case lastSeen > 0 && age <= lobbyPresenceOnlineTTL.Milliseconds():
+			snap.Members[i].Connected = true
+			snap.Members[i].PresenceStatus = contracts.LobbyPresenceOnline
+		case lastSeen > 0 && age <= lobbyPresenceAwayTTL.Milliseconds():
+			snap.Members[i].Connected = false
+			snap.Members[i].PresenceStatus = contracts.LobbyPresenceAway
+		default:
+			snap.Members[i].Connected = false
+			snap.Members[i].PresenceStatus = contracts.LobbyPresenceOffline
+		}
 	}
 }
 
@@ -760,11 +822,15 @@ func lobbyPresenceField(userID, connID string) string {
 	return userID + "|" + connID
 }
 
+func lobbyPresenceKey(lobbyID string) string {
+	return "lobby:presence:" + strings.TrimSpace(lobbyID)
+}
+
 func lobbyPresenceUserID(field string) string {
 	if before, _, ok := strings.Cut(field, "|"); ok {
 		return before
 	}
-	return ""
+	return field
 }
 
 func (q *matchCoordinator) runLobbyCleanupLoop(interval, inactivityTTL time.Duration) {
