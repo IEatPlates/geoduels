@@ -34,6 +34,12 @@ spec:
           env:
             - name: MATCH_COORDINATOR_ADDR
               value: :8090
+            - name: POSTGRES_URL
+              value: postgres://geoduels:geoduels@pgbouncer:6432/geoduels?sslmode=disable
+            - name: POSTGRES_PGBOUNCER
+              value: "true"
+            - name: POSTGRES_MAX_CONNS
+              value: "8"
           livenessProbe:
             httpGet:
               path: /health/live

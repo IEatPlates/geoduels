@@ -42,3 +42,9 @@ Apply the overlay:
 ```bash
 kubectl apply -k infra/k3s/overlays/k3d
 ```
+
+The base manifests run PgBouncer inside the cluster and point DB-using
+workloads at `pgbouncer:6432`. The `geoduels-secrets` secret must include
+`PGBOUNCER_POSTGRES_HOST`, `PGBOUNCER_POSTGRES_PORT`, `PGBOUNCER_POSTGRES_DB`,
+`PGBOUNCER_POSTGRES_USER`, and `PGBOUNCER_POSTGRES_PASSWORD` for PgBouncer's
+upstream direct Postgres connection.

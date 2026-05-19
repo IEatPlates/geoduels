@@ -10,6 +10,8 @@ resources:
   - match-coordinator-deployment.yaml
   - match-coordinator-service.yaml
   - moderation-worker-deployment.yaml
+  - pgbouncer-deployment.yaml
+  - pgbouncer-service.yaml
   - realtime-gateway-deployment.yaml
   - realtime-gateway-service.yaml
   - web-deployment.yaml

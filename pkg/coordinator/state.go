@@ -86,6 +86,7 @@ func (s *Store) RegisterNode(ctx context.Context, rec NodeRecord) error {
 		if ok && existing.PublicRoute != "" && existing.PublicRoute != rec.PublicRoute {
 			pipe.Del(ctx, nodeRouteKey(existing.PublicRoute))
 		}
+		pipe.SAdd(ctx, nodeIndexKey(), rec.NodeID)
 		pipe.Set(ctx, nodeKey(rec.NodeID), mustJSON(rec), s.nodeTTL)
 		pipe.Set(ctx, nodeRouteKey(rec.PublicRoute), mustJSON(rec), s.nodeTTL)
 		return nil
@@ -100,6 +101,7 @@ func (s *Store) RemoveNode(ctx context.Context, nodeID string) error {
 	rec, _, _ := s.GetNodeByID(ctx, nodeID)
 	_, err := s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, nodeKey(nodeID))
+		pipe.SRem(ctx, nodeIndexKey(), nodeID)
 		if rec.PublicRoute != "" {
 			pipe.Del(ctx, nodeRouteKey(rec.PublicRoute))
 		}
@@ -109,28 +111,25 @@ func (s *Store) RemoveNode(ctx context.Context, nodeID string) error {
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]NodeRecord, error) {
-	var cursor uint64
-	out := []NodeRecord{}
-	for {
-		keys, next, err := s.rdb.Scan(ctx, cursor, "rt:node:*", 50).Result()
+	nodeIDs, err := s.rdb.SMembers(ctx, nodeIndexKey()).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NodeRecord, 0, len(nodeIDs))
+	stale := make([]any, 0)
+	for _, nodeID := range nodeIDs {
+		rec, ok, err := s.GetNodeByID(ctx, nodeID)
 		if err != nil {
 			return nil, err
 		}
-		for _, key := range keys {
-			b, err := s.rdb.Get(ctx, key).Bytes()
-			if err != nil {
-				continue
-			}
-			var rec NodeRecord
-			if err := json.Unmarshal(b, &rec); err != nil || rec.NodeID == "" {
-				continue
-			}
-			out = append(out, rec)
+		if !ok {
+			stale = append(stale, nodeID)
+			continue
 		}
-		cursor = next
-		if cursor == 0 {
-			break
-		}
+		out = append(out, rec)
+	}
+	if len(stale) > 0 {
+		_ = s.rdb.SRem(context.Background(), nodeIndexKey(), stale...).Err()
 	}
 	return out, nil
 }
@@ -298,6 +297,10 @@ func nodeKey(nodeID string) string {
 
 func nodeRouteKey(route string) string {
 	return "rt:node-route:" + route
+}
+
+func nodeIndexKey() string {
+	return "rt:nodes"
 }
 
 func matchKey(matchID string) string {

@@ -14,6 +14,9 @@ func NewFromEnvForMapKey(ctx context.Context, mapKey string, cfg Config) (*Sampl
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.MatchTTL <= 0 {
+		cfg.MatchTTL = defaultMatchTTL
+	}
 	store := NewRedisStateStoreFromEnv(cfg.MatchTTL)
 	s := New(db, store, cfg)
 	if err := s.Init(ctx); err != nil {

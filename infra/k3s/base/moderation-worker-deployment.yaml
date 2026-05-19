@@ -34,6 +34,12 @@ spec:
           env:
             - name: MODERATION_WORKER_ADDR
               value: :8093
+            - name: POSTGRES_URL
+              value: postgres://geoduels:geoduels@pgbouncer:6432/geoduels?sslmode=disable
+            - name: POSTGRES_PGBOUNCER
+              value: "true"
+            - name: POSTGRES_MAX_CONNS
+              value: "2"
           livenessProbe:
             httpGet:
               path: /health/live

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,7 +40,17 @@ func NewDBStoreFromEnvForMapKey(mapKey string) (*DBStore, error) {
 	url = normalizeDBURLForContainer(url)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	if maxConns := getenvInt("POSTGRES_MAX_CONNS", 0); maxConns > 0 {
+		cfg.MaxConns = int32(maxConns)
+	}
+	if strings.EqualFold(os.Getenv("POSTGRES_PGBOUNCER"), "true") {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +62,18 @@ func NewDBStoreFromEnvForMapKey(mapKey string) (*DBStore, error) {
 		mapKey = contracts.MapKeyMoving
 	}
 	return &DBStore{pool: pool, mapKey: mapKey}, nil
+}
+
+func getenvInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func (d *DBStore) Close() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -36,7 +37,7 @@ func (s *pgStore) CreateLobby(ownerUserID string, mode contracts.MatchMode, mapS
 		tx, err := s.pool.Begin(ctx)
 		if err != nil {
 			cancel()
-			return contracts.LobbySnapshot{}, err
+			return contracts.LobbySnapshot{}, fmt.Errorf("begin create lobby tx: %w", err)
 		}
 		inviteCode := newLobbyCode()
 		lobbyID := newLobbyID("lob")
@@ -48,7 +49,7 @@ func (s *pgStore) CreateLobby(ownerUserID string, mode contracts.MatchMode, mapS
 			_ = tx.Rollback(ctx)
 			cancel()
 			if attempt == 4 {
-				return contracts.LobbySnapshot{}, err
+				return contracts.LobbySnapshot{}, fmt.Errorf("insert lobby: %w", err)
 			}
 			continue
 		}
@@ -58,15 +59,21 @@ func (s *pgStore) CreateLobby(ownerUserID string, mode contracts.MatchMode, mapS
 		`, lobbyID, ownerUserID); err != nil {
 			_ = tx.Rollback(ctx)
 			cancel()
-			return contracts.LobbySnapshot{}, err
+			return contracts.LobbySnapshot{}, fmt.Errorf("insert lobby owner: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			cancel()
-			return contracts.LobbySnapshot{}, err
+			if snap, ok, readErr := s.GetLobbyByID(lobbyID); readErr == nil && ok {
+				return snap, nil
+			}
+			return contracts.LobbySnapshot{}, fmt.Errorf("commit create lobby tx: %w", err)
 		}
 		cancel()
 		snap, _, err := s.GetLobbyByID(lobbyID)
-		return snap, err
+		if err != nil {
+			return contracts.LobbySnapshot{}, fmt.Errorf("read created lobby: %w", err)
+		}
+		return snap, nil
 	}
 	return contracts.LobbySnapshot{}, errors.New("could not allocate lobby invite code")
 }
@@ -548,23 +555,90 @@ func (s *pgStore) listLobbyMembers(ctx context.Context, lobbyID string) ([]contr
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []contracts.LobbyMember{}
+	selected := map[string]string{}
 	for rows.Next() {
 		var member contracts.LobbyMember
 		var selectedBadgeCode int16
 		var selectedBadgeSeasonID string
 		if err := rows.Scan(&member.UserID, &member.DisplayName, &member.AvatarURL, &member.IsGuest, &member.IsAdmin, &selectedBadgeCode, &selectedBadgeSeasonID, &member.TeamID, &member.Role, &member.Ready, &member.JoinedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		_, selectedBadge, err := s.profileBadges(ctx, member.UserID, badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID))
-		if err != nil {
-			return nil, err
-		}
-		member.SelectedBadge = selectedBadge
+		selected[member.UserID] = badgeIDFromParts(selectedBadgeCode, selectedBadgeSeasonID)
 		out = append(out, member)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	badges, err := s.selectedLobbyBadges(ctx, selected)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].SelectedBadge = badges[out[i].UserID]
+	}
+	return out, nil
+}
+
+func (s *pgStore) selectedLobbyBadges(ctx context.Context, selected map[string]string) (map[string]*contracts.PlayerBadge, error) {
+	if len(selected) == 0 {
+		return map[string]*contracts.PlayerBadge{}, nil
+	}
+	userIDs := make([]string, 0, len(selected))
+	for userID := range selected {
+		if strings.TrimSpace(userID) != "" {
+			userIDs = append(userIDs, userID)
+		}
+	}
+	if len(userIDs) == 0 {
+		return map[string]*contracts.PlayerBadge{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		select ub.user_id, ub.badge_code, coalesce(ub.badge_season_id, ''), coalesce(ub.rank, 0)
+		from user_badges ub
+		where ub.user_id = any($1)
+		order by ub.user_id asc, ub.awarded_at desc, ub.badge_code asc, ub.badge_season_id asc
+	`, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]*contracts.PlayerBadge{}
+	fallback := map[string]*contracts.PlayerBadge{}
+	for rows.Next() {
+		var userID string
+		var code int16
+		var seasonID string
+		var rank int
+		if err := rows.Scan(&userID, &code, &seasonID, &rank); err != nil {
+			return nil, err
+		}
+		badge, ok := badgeFromParts(code, seasonID, rank, true)
+		if !ok {
+			continue
+		}
+		if fallback[userID] == nil {
+			b := badge
+			fallback[userID] = &b
+		}
+		if out[userID] == nil && badge.ID == selected[userID] {
+			b := badge
+			out[userID] = &b
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for userID, badge := range fallback {
+		if out[userID] == nil {
+			out[userID] = badge
+		}
+	}
+	return out, nil
 }
 
 func newLobbyID(prefix string) string {

@@ -46,6 +46,12 @@ spec:
               value: http://$(POD_NAME).gameplay-node-headless.$(POD_NAMESPACE).svc.cluster.local:8091
             - name: GAMEPLAY_DRAIN_TIMEOUT
               value: 15m
+            - name: POSTGRES_URL
+              value: postgres://geoduels:geoduels@pgbouncer:6432/geoduels?sslmode=disable
+            - name: POSTGRES_PGBOUNCER
+              value: "true"
+            - name: POSTGRES_MAX_CONNS
+              value: "4"
           livenessProbe:
             httpGet:
               path: /health/live
