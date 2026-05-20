@@ -1,0 +1,213 @@
+name: release-prod
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ vars.REGISTRY != '' && vars.REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
+  OPS_REPOSITORY: ${{ vars.OPS_REPOSITORY != '' && vars.OPS_REPOSITORY || 'sourcelocation/geoduels-prod' }}
+  PRODUCTION_SITE_URL: ${{ vars.PRODUCTION_SITE_URL != '' && vars.PRODUCTION_SITE_URL || 'https://geoduels.io' }}
+
+jobs:
+  release-meta:
+    name: release-meta
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.meta.outputs.release_sha }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          set -euo pipefail
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+  go-checks:
+    name: go-checks
+    runs-on: ubuntu-latest
+    needs: release-meta
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-meta.outputs.release_sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - run: go test ./...
+      - run: go vet ./...
+
+  web-checks:
+    name: web-checks
+    runs-on: ubuntu-latest
+    needs: release-meta
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-meta.outputs.release_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Test and build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_APP_VERSION: ${{ needs.release-meta.outputs.release_tag }}
+          NEXT_PUBLIC_GIT_SHA: ${{ needs.release-meta.outputs.release_sha }}
+          NEXT_PUBLIC_SITE_URL: ${{ env.PRODUCTION_SITE_URL }}
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test
+          npm run build
+
+  build-and-push-amd64:
+    name: build-and-push-amd64
+    runs-on: ubuntu-latest
+    needs:
+      - release-meta
+      - go-checks
+      - web-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: geoduels-api
+            dockerfile: services/api/Dockerfile
+            context: .
+          - image: geoduels-match-coordinator
+            dockerfile: services/match-coordinator/Dockerfile
+            context: .
+          - image: geoduels-gameplay-node
+            dockerfile: services/gameplay-node/Dockerfile
+            context: .
+          - image: geoduels-moderation-worker
+            dockerfile: services/moderation-worker/Dockerfile
+            context: .
+          - image: geoduels-realtime-gateway
+            dockerfile: services/realtime-gateway/Dockerfile
+            context: .
+          - image: geoduels-web
+            dockerfile: apps/web/Dockerfile
+            context: apps/web
+            build_args: |
+              NEXT_PUBLIC_APP_VERSION=${{ needs.release-meta.outputs.release_tag }}
+              NEXT_PUBLIC_GIT_SHA=${{ needs.release-meta.outputs.release_sha }}
+              NEXT_PUBLIC_SITE_URL=${{ vars.PRODUCTION_SITE_URL != '' && vars.PRODUCTION_SITE_URL || 'https://geoduels.io' }}
+          - image: geoduels-location-ingest
+            dockerfile: workers/location-ingest/Dockerfile
+            context: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-meta.outputs.release_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        run: |
+          set -euo pipefail
+          REGISTRY_HOST="$(echo "$REGISTRY" | cut -d/ -f1)"
+          echo "${{ github.token }}" | docker login "$REGISTRY_HOST" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push ${{ matrix.image }} (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          build-args: ${{ matrix.build_args || '' }}
+          cache-from: type=gha,scope=${{ matrix.image }}-amd64
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-amd64
+          tags: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.release-meta.outputs.release_tag }}-amd64
+
+  update-ops-repo:
+    name: update-ops-repo
+    runs-on: ubuntu-latest
+    environment: production
+    needs:
+      - release-meta
+      - build-and-push-amd64
+    steps:
+      - name: Checkout ops repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.OPS_REPOSITORY }}
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          path: ops
+
+      - name: Install kustomize
+        run: |
+          KUSTOMIZE_VERSION="v5.5.0"
+          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" | tar -xz
+          sudo mv kustomize /usr/local/bin/kustomize
+
+      - name: Update production image tags
+        working-directory: ops/infra/k3s/overlays/prod
+        run: |
+          set -euo pipefail
+          kustomize edit set image \
+            ghcr.io/sourcelocation/geoduels-api="${{ env.REGISTRY }}/geoduels-api:${{ needs.release-meta.outputs.release_tag }}-amd64" \
+            ghcr.io/sourcelocation/geoduels-match-coordinator="${{ env.REGISTRY }}/geoduels-match-coordinator:${{ needs.release-meta.outputs.release_tag }}-amd64" \
+            ghcr.io/sourcelocation/geoduels-gameplay-node="${{ env.REGISTRY }}/geoduels-gameplay-node:${{ needs.release-meta.outputs.release_tag }}-amd64" \
+            ghcr.io/sourcelocation/geoduels-moderation-worker="${{ env.REGISTRY }}/geoduels-moderation-worker:${{ needs.release-meta.outputs.release_tag }}-amd64" \
+            ghcr.io/sourcelocation/geoduels-realtime-gateway="${{ env.REGISTRY }}/geoduels-realtime-gateway:${{ needs.release-meta.outputs.release_tag }}-amd64" \
+            ghcr.io/sourcelocation/geoduels-web="${{ env.REGISTRY }}/geoduels-web:${{ needs.release-meta.outputs.release_tag }}-amd64"
+
+      - name: Update runtime version
+        working-directory: ops
+        env:
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path("infra/k3s/overlays/prod/runtime-config.yaml")
+          lines = path.read_text().splitlines()
+          lines = [
+              f"  NEXT_PUBLIC_APP_VERSION: {os.environ['RELEASE_TAG']}"
+              if line.startswith("  NEXT_PUBLIC_APP_VERSION: ")
+              else line
+              for line in lines
+          ]
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Validate ops manifests
+        working-directory: ops
+        run: kustomize build infra/k3s/overlays/prod >/tmp/geoduels-prod.yaml
+
+      - name: Create ops release pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          path: ops
+          branch: release/prod-${{ needs.release-meta.outputs.release_tag }}
+          commit-message: "release(prod): pin images for ${{ needs.release-meta.outputs.release_tag }}"
+          title: "release(prod): deploy ${{ needs.release-meta.outputs.release_tag }}"
+          body: |
+            Production release prepared from `${{ github.repository }}`.
+
+            - Release tag: `${{ needs.release-meta.outputs.release_tag }}`
+            - Release commit: `${{ needs.release-meta.outputs.release_sha }}`
+            - Deploy method: merge this PR and let Flux reconcile production.
+          add-paths: |
+            infra/k3s/overlays/prod/kustomization.yaml
+            infra/k3s/overlays/prod/runtime-config.yaml
